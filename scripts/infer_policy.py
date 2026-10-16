@@ -45,14 +45,29 @@ BAM_MAX_CURRENT = None            # training runs WITHOUT the firmware current l
 BAM_STIFF_SOLREF_FRICTION = (-5.0e4, -2.0e2)
 BAM_STIFF_SOLIMP_FRICTION = (0.99, 0.9999, 0.001, 0.5, 2.0)
 
+# --hd1910: Feetech HD-1910-C001 servos. MUST mirror HD1910_BAM_ACTUATOR_KWARGS /
+# HD1910FrictionDRBamActuatorCfg in src/mjlab_microduck/robot/microduck_hd1910_constants.py
+# and actuator/friction_dr_bam.py (locked by tests/test_hd1910.py). Provisional
+# model: datasheet kt/R, XL330 friction; the rest of the DR is the XL330's.
+HD1910_XML = "src/mjlab_microduck/robot/microduck_hd1910/scene_walk_hd1910.xml"
+HD1910_PARAMS_JSON = "src/mjlab_microduck/actuator/params/hd1910_provisional_m6.json"
+HD1910_KP_FW = 156.0              # same 0.55 N.m/rad stiffness as the XL330 at 7.4 V
+HD1910_MAX_PWM = 0.98             # reg 16 max torque 980 x 0.1 %
+HD1910_MAX_CURRENT = None         # Feetech protection current unloads, it does not clamp
 
-def load_bam_model(kp_fw: float, vin: float, max_current):
-    """Build the BAM M6 model + XL330 voltage-controlled actuator."""
+
+def load_bam_model(kp_fw: float, vin: float, max_current, json_path=None, max_pwm=None):
+    """Build the BAM M6 model + voltage-controlled actuator (XL330, or a params JSON: --hd1910)."""
     from bam.model import load_model
-    bam_model = load_model(motor_name=BAM_MOTOR_NAME, model=BAM_MODEL)
+    if json_path:
+        bam_model = load_model(json_path)
+    else:
+        bam_model = load_model(motor_name=BAM_MOTOR_NAME, model=BAM_MODEL)
     bam_model.actuator.kp = kp_fw
     bam_model.actuator.vin = vin
     bam_model.actuator.max_current = max_current if (max_current and max_current > 0) else None
+    if max_pwm is not None:
+        bam_model.actuator.max_pwm = max_pwm
     return bam_model
 
 
@@ -1206,8 +1221,10 @@ def main():
     parser.add_argument("--vin-drop-gain", type=float, default=0.1,
                         help="BAM load-dependent voltage sag gain [V/Nm], V = vin - gain*sum|tau|. "
                              f"Training samples per-env in {BAM_VIN_DROP_GAIN_RANGE}. 0 disables.")
-    parser.add_argument("--kp-fw", type=float, default=BAM_KP_FW,
-                        help="BAM firmware P-gain (training uses %(default)s).")
+    parser.add_argument("--hd1910", action="store_true",
+                        help="Feetech HD-1910 servos: HD-1910 model + provisional BAM params (as the -HD1910 tasks)")
+    parser.add_argument("--kp-fw", type=float, default=None,
+                        help=f"BAM firmware P-gain (training uses {BAM_KP_FW:g}, or {HD1910_KP_FW:g} with --hd1910).")
     parser.add_argument("--current-limit", type=float, default=0.0,
                         help="XL330 firmware current limit [A]. With BAM this is the duty-cycle "
                              "limiter of the voltage model (as bam models it); with --no-bam the "
@@ -1261,8 +1278,12 @@ def main():
     # Load MuJoCo model. Kick policies get a scene with a ball to kick.
     # --scene overrides everything (any scene whose robot has the standard
     # 14-servo layout works, e.g. scene_allcollisions.xml).
+    if args.kp_fw is None:
+        args.kp_fw = HD1910_KP_FW if args.hd1910 else BAM_KP_FW
     if args.scene:
         xml_path = args.scene
+    elif args.hd1910:
+        xml_path = HD1910_XML
     elif args.roller:
         xml_path = MICRODUCK_ROLLERS_XML
     elif args.kick_left or args.kick_right:
@@ -1276,7 +1297,11 @@ def main():
         # voltage control + load-dependent friction budget), driven on CPU by
         # bam.mujoco.MujocoController. Voltage DR collapses to fixed --vin /
         # --vin-drop-gain (training samples them per env).
-        bam_model = load_bam_model(args.kp_fw, args.vin, args.current_limit)
+        if args.hd1910:
+            bam_model = load_bam_model(args.kp_fw, args.vin, args.current_limit or HD1910_MAX_CURRENT,
+                                       json_path=HD1910_PARAMS_JSON, max_pwm=HD1910_MAX_PWM)
+        else:
+            bam_model = load_bam_model(args.kp_fw, args.vin, args.current_limit)
         vin_drop_gain = args.vin_drop_gain if args.vin_drop_gain > 0 else None
         model, data, bam_ctrl, _bam_names = load_mujoco_with_bam(
             xml_path, bam_model, 0.005, vin_drop_gain, BAM_VIN_MIN)
