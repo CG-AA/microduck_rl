@@ -120,6 +120,15 @@ def load_mujoco_with_bam(xml_path: str, bam_model, timestep: float, vin_drop_gai
     return model, data, bam_ctrl, names
 
 
+def make_session(onnx_path):
+    """onnxruntime session pinned to the CPU provider, single-threaded, sequential: rollouts are bit-identical."""
+    so = ort.SessionOptions()
+    so.intra_op_num_threads = 1
+    so.inter_op_num_threads = 1
+    so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    return ort.InferenceSession(onnx_path, sess_options=so, providers=["CPUExecutionProvider"])
+
+
 # Body pose command constants (must match training constants)
 BODY_CMD_MAX_Z = 0.03              # ±30 mm
 BODY_CMD_MAX_XY = 0.02             # ±20 mm
@@ -233,7 +242,8 @@ class PolicyInference:
                  sitstand_onnx_path=None,
                  kick_left_onnx_path=None, kick_right_onnx_path=None,
                  roulade_onnx_path=None,
-                 kick_duration=3.0, roulade_duration=2.0):
+                 kick_duration=3.0, roulade_duration=2.0,
+                 joint_vel_lag=0, default_pose=None):
         self.bam_ctrl = bam_ctrl  # bam.mujoco.MujocoController (None = legacy position actuators)
         self.model = model
         self.data = data
@@ -252,7 +262,7 @@ class PolicyInference:
         self.default_gait_period_from_onnx = None
         if walking_onnx_path:
             print(f"Loading walking policy from: {walking_onnx_path}")
-            self.walking_session = ort.InferenceSession(walking_onnx_path)
+            self.walking_session = make_session(walking_onnx_path)
             w_input_shape = self.walking_session.get_inputs()[0].shape
             w_output_shape = self.walking_session.get_outputs()[0].shape
             print(f"Walking policy input: {self.walking_session.get_inputs()[0].name}, shape: {w_input_shape}")
@@ -271,7 +281,7 @@ class PolicyInference:
         self.standing_session = None
         if standing_onnx_path:
             print(f"\nLoading standing policy from: {standing_onnx_path}")
-            self.standing_session = ort.InferenceSession(standing_onnx_path)
+            self.standing_session = make_session(standing_onnx_path)
             s_input_shape = self.standing_session.get_inputs()[0].shape
             s_output_shape = self.standing_session.get_outputs()[0].shape
             print(f"Standing policy input: {self.standing_session.get_inputs()[0].name}, shape: {s_input_shape}")
@@ -286,7 +296,7 @@ class PolicyInference:
         self.ground_pick_period = ground_pick_period
         if ground_pick_onnx_path:
             print(f"\nLoading ground pick policy from: {ground_pick_onnx_path}")
-            self.ground_pick_session = ort.InferenceSession(ground_pick_onnx_path)
+            self.ground_pick_session = make_session(ground_pick_onnx_path)
             gp_input_shape = self.ground_pick_session.get_inputs()[0].shape
             print(f"Ground pick policy input shape: {gp_input_shape}")
 
@@ -304,7 +314,7 @@ class PolicyInference:
             raise ValueError("Provide only one of --sit / --sitstand")
         if sit_onnx_path:
             print(f"\nLoading sit policy from: {sit_onnx_path}")
-            self.sit_session = ort.InferenceSession(sit_onnx_path)
+            self.sit_session = make_session(sit_onnx_path)
             sit_input_shape = self.sit_session.get_inputs()[0].shape
             print(f"Sit policy input shape: {sit_input_shape}")
         elif sitstand_onnx_path:
@@ -313,7 +323,7 @@ class PolicyInference:
                     "--sitstand policies use the unified 13D command obs (61D); run with --new-cmd-obs"
                 )
             print(f"\nLoading sitstand policy from: {sitstand_onnx_path}")
-            self.sit_session = ort.InferenceSession(sitstand_onnx_path)
+            self.sit_session = make_session(sitstand_onnx_path)
             self.is_sitstand = True
             ss_input_shape = self.sit_session.get_inputs()[0].shape
             print(f"Sitstand policy input shape: {ss_input_shape}")
@@ -323,7 +333,7 @@ class PolicyInference:
         self.slope_mode = False
         if slope_onnx_path:
             print(f"\nLoading slope policy from: {slope_onnx_path}")
-            self.slope_session = ort.InferenceSession(slope_onnx_path)
+            self.slope_session = make_session(slope_onnx_path)
             sl_input_shape = self.slope_session.get_inputs()[0].shape
             print(f"Slope policy input shape: {sl_input_shape}")
 
@@ -349,7 +359,7 @@ class PolicyInference:
                     "command obs (61D); run with --new-cmd-obs"
                 )
             print(f"\nLoading {name} policy from: {path}")
-            self.behavior_sessions[name] = ort.InferenceSession(path)
+            self.behavior_sessions[name] = make_session(path)
             self.behavior_durations[name] = duration
             print(f"{name} policy input shape: {self.behavior_sessions[name].get_inputs()[0].shape}"
                   f"  (auto-return after {duration:.1f}s)")
@@ -409,8 +419,18 @@ class PolicyInference:
             int(model.jnt_dofadr[model.actuator_trnid[i, 0]]) for i in range(model.nu)
         ]
 
-        # Default pose for the policy (flexed legs)
-        self.default_pose = DEFAULT_POSE[:self.n_joints]
+        # Default pose for the policy (flexed legs): the action offset and the
+        # joint_pos obs reference. Callers that know the policy's own default
+        # (ONNX metadata default_joint_pos, or a robot variant's init_state)
+        # pass it in; DEFAULT_POSE is the stock Microduck HOME.
+        base = DEFAULT_POSE if default_pose is None else np.asarray(default_pose, dtype=np.float32)
+        self.default_pose = base[:self.n_joints]
+        # Training feeds the policy joint velocities one control step old
+        # (microduck_velocity_env_cfg: lagged joint_vel). 0 = instantaneous.
+        self.joint_vel_lag = int(joint_vel_lag)
+        self._jv_hist = []
+        self._jv_time = None
+        self.last_obs = None
         print(f"Number of actuators: {self.n_joints}")
         print(f"Default pose: {self.default_pose}")
         print(f"Action scale: {self.action_scale}")
@@ -665,8 +685,20 @@ class PolicyInference:
         return current_pos - self.default_pose
 
     def get_joint_vel(self):
-        """Get joint velocities."""
-        return self.data.qvel[self.joint_qvel_indices].copy().astype(np.float32)
+        """Get joint velocities, joint_vel_lag control steps old (refreshed once per sim time)."""
+        cur = self.data.qvel[self.joint_qvel_indices].copy().astype(np.float32)
+        if self.joint_vel_lag <= 0:
+            return cur
+        if self._jv_time != self.data.time:
+            self._jv_time = self.data.time
+            self._jv_hist.append(cur)
+            del self._jv_hist[:-(self.joint_vel_lag + 1)]
+        return self._jv_hist[0]
+
+    def reset_history(self):
+        """Forget lagged observations (call after resetting the simulation)."""
+        self._jv_hist = []
+        self._jv_time = None
 
     def get_observations(self):
         """Collect observations matching policy input.
@@ -872,6 +904,7 @@ class PolicyInference:
     def infer(self):
         """Run policy inference and return action."""
         obs = self.get_observations()
+        self.last_obs = obs
         obs_batch = obs.reshape(1, -1)
         action = self.ort_session.run([self.output_name], {self.input_name: obs_batch})[0]
         action = action.squeeze(0).astype(np.float32)
@@ -1203,6 +1236,8 @@ def main():
     parser.add_argument("--action-scale", type=float, default=1.0, help="Action scale (default: 1.0)")
     parser.add_argument("--raw-accelerometer", action="store_true", help="Use raw accelerometer instead of projected gravity")
     parser.add_argument("--delay", type=int, nargs='*', default=None, help="Enable actuator delay: --delay MIN MAX or --delay LAG")
+    parser.add_argument("--joint-vel-lag", type=int, default=0,
+                        help="Feed joint velocities this many control steps old, as training does (1). Default 0: instantaneous.")
     parser.add_argument("--debug", action="store_true", help="Print observations and actions")
     parser.add_argument("--save-csv", type=str, default=None, help="Save observations and actions to CSV file")
     parser.add_argument("--record", type=str, default=None, help="Enable recording mode: save observations to pickle file on Ctrl+C")
@@ -1367,6 +1402,7 @@ def main():
         roulade_onnx_path=args.roulade,
         kick_duration=args.kick_duration,
         roulade_duration=args.roulade_duration,
+        joint_vel_lag=args.joint_vel_lag,
     )
     policy.set_vel_cmd(args.lin_vel_x, args.lin_vel_y, args.ang_vel_z)
 

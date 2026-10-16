@@ -65,16 +65,14 @@ def main():
     title = args.title or ("Microduck, Feetech HD-1910 (provisional BAM model)" if args.hd1910 else "Microduck, XL330")
     writer = imageio.get_writer(args.out, fps=1.0 / (every * dt), codec="libx264", quality=8, macro_block_size=8)
     speed, t, k = np.zeros(3), 0.0, 0
+    delay = ev.DelayLine(policy.default_pose, ev.ACTION_DELAY, np.random.default_rng(0))  # training-like target delay
     for label, seconds, vx, vy, wz in SCRIPT:
         policy.set_vel_cmd(vx, vy, wz)
         for _ in range(int(round(seconds / dt))):
-            policy.apply_action(policy.infer())
-            for _ in range(ev.DECIMATION):
-                bam_ctrl.update()
-                mujoco.mj_step(model, data)
+            ev.control_step(policy, bam_ctrl, model, data, delay)
             t += dt
-            R = data.xmat[trunk].reshape(3, 3)
-            v = np.array([*(R.T @ data.qvel[dof:dof + 3])[:2], data.qvel[dof + 5]])
+            v_body, w_body, _ = ev.body_rates(data, trunk, dof)
+            v = np.array([v_body[0], v_body[1], w_body[2]])
             speed = 0.9 * speed + 0.1 * v  # ~0.2 s smoothing for display
             if k % every == 0:
                 renderer.update_scene(data, cam, opt)
