@@ -110,3 +110,52 @@ class BacklashEncoderBamActuatorCfg(FrictionDRBamActuatorCfg):
 
     def build(self, entity, target_ids, target_names) -> BacklashEncoderBamActuator:
         return BacklashEncoderBamActuator(self, entity, target_ids, target_names)
+
+
+# -- Feetech HD-1910-C001 -------------------------------------------------------
+#
+# There is no BAM fit for the HD-1910 yet. Its params JSON
+# (actuator/params/hd1910_provisional_m6.json) carries datasheet-derived kt/R and
+# reuses the XL330 voltage control law (bam's Feetech sts3215 class keeps
+# per-log state that mjlab never initializes). The XL330 class hard-codes the
+# Dynamixel firmware limits, so these subclasses swap in the HD-1910's:
+#   * no current limiter: the Feetech "protection current" (reg 28) unloads the
+#     servo after the overcurrent time (reg 38, 2 s), it does not clamp current;
+#   * max duty 0.98: the "max torque" register (reg 16, default 980 x 0.1 %)
+#     caps the PWM duty cycle.
+
+
+class _HD1910Firmware:
+    """Mixin: replace the XL330 firmware limits with the HD-1910's (cfg fields)."""
+
+    def __init__(self, cfg, entity, target_ids, target_names) -> None:
+        super().__init__(cfg, entity, target_ids, target_names)
+        self._bam_model.actuator.max_current = cfg.max_current
+        self._bam_model.actuator.max_pwm = cfg.max_pwm
+
+
+class HD1910FrictionDRBamActuator(_HD1910Firmware, FrictionDRBamActuator):
+    """FrictionDRBamActuator with HD-1910 firmware limits."""
+
+
+class HD1910BacklashEncoderBamActuator(_HD1910Firmware, BacklashEncoderBamActuator):
+    """BacklashEncoderBamActuator with HD-1910 firmware limits."""
+
+
+@dataclass(kw_only=True)
+class HD1910FrictionDRBamActuatorCfg(FrictionDRBamActuatorCfg):
+    """FrictionDRBamActuatorCfg for the HD-1910 (set json_path to its params)."""
+
+    max_current: float | None = None
+    max_pwm: float = 0.98
+
+    def build(self, entity, target_ids, target_names) -> HD1910FrictionDRBamActuator:
+        return HD1910FrictionDRBamActuator(self, entity, target_ids, target_names)
+
+
+@dataclass(kw_only=True)
+class HD1910BacklashEncoderBamActuatorCfg(HD1910FrictionDRBamActuatorCfg):
+    """HD-1910 actuator cfg whose PD feedback reads through backlash joints."""
+
+    def build(self, entity, target_ids, target_names) -> HD1910BacklashEncoderBamActuator:
+        return HD1910BacklashEncoderBamActuator(self, entity, target_ids, target_names)

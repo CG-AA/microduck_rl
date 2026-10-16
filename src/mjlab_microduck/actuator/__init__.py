@@ -3,6 +3,10 @@ from mjlab_microduck.actuator.friction_dr_bam import (
     BacklashEncoderBamActuatorCfg,
     FrictionDRBamActuator,
     FrictionDRBamActuatorCfg,
+    HD1910BacklashEncoderBamActuator,
+    HD1910BacklashEncoderBamActuatorCfg,
+    HD1910FrictionDRBamActuator,
+    HD1910FrictionDRBamActuatorCfg,
 )
 
 __all__ = [
@@ -10,4 +14,8 @@ __all__ = [
     "BacklashEncoderBamActuatorCfg",
     "FrictionDRBamActuator",
     "FrictionDRBamActuatorCfg",
+    "HD1910BacklashEncoderBamActuator",
+    "HD1910BacklashEncoderBamActuatorCfg",
+    "HD1910FrictionDRBamActuator",
+    "HD1910FrictionDRBamActuatorCfg",
 ]

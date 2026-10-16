@@ -1,0 +1,20 @@
+{
+    "_note": "PROVISIONAL Feetech HD-1910-C001 model, not a BAM fit. kt and R are derived from the datasheet (6 V: 12 kg.cm / 10 kg.cm stall, 1.6 A stall current, 0.109 s/60 deg no-load): kt 0.62 and R 3.75 give 0.99 N.m stall (conservative 10 kg.cm figure), 1.6 A and 9.7 rad/s at 6 V. armature and every friction term are copied from bam's xl330/m6.json (mjlab_frictionloss @ 62bd8ce) as a same-class coreless placeholder; q_offset is 0. The xl330 control law is reused (actuator key) with HD-1910 firmware limits set by HD1910*BamActuator. Replace with a bam.fit of a real HD-1910 on a pendulum rig.",
+    "kt": 0.62,
+    "R": 3.75,
+    "armature": 0.0018077432831600838,
+    "q_offset": 0.0,
+    "friction_base": 0.004771183165566,
+    "friction_stribeck": 0.004676345799486616,
+    "load_friction_motor": 0.2667860954283698,
+    "load_friction_external": 8.515871897059342e-06,
+    "load_friction_motor_stribeck": 1.0722918395099123e-05,
+    "load_friction_external_stribeck": 0.08077928978935671,
+    "load_friction_motor_quad": 0.009972471242139415,
+    "load_friction_external_quad": 0.004902565732332559,
+    "dtheta_stribeck": 2.890372094130307,
+    "alpha": 8.683259907618984,
+    "friction_viscous": 0.005359668274599504,
+    "model": "m6",
+    "actuator": "xl330"
+}

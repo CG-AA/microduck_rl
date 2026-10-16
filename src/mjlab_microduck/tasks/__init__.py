@@ -278,3 +278,26 @@ for _task_id, _make_cfg, _kw, _rl_cfg, _robot_cfg in _BACKLASH_TASKS:
         rl_cfg=_rl_cfg,
         runner_cls=MicroduckOnPolicyRunner,
     )
+
+# HD-1910 variants — the velocity recipe on Feetech HD-1910-C001 servos
+# (provisional BAM model, see tasks/hd1910.py). Same obs/action contract.
+from mjlab_microduck.robot.microduck_hd1910_constants import (
+    HD1910_WALK_BACKLASH_ROBOT_CFG,
+    HD1910_WALK_ROBOT_CFG,
+)
+from .hd1910 import MicroduckHD1910RlCfg, make_hd1910_variant
+
+register_mjlab_task(
+    task_id="Mjlab-Velocity-Flat-MicroDuck-HD1910",
+    env_cfg=make_hd1910_variant(make_microduck_velocity_env_cfg(), HD1910_WALK_ROBOT_CFG),
+    play_env_cfg=make_hd1910_variant(make_microduck_velocity_env_cfg(play=True), HD1910_WALK_ROBOT_CFG),
+    rl_cfg=MicroduckHD1910RlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+register_mjlab_task(
+    task_id="Mjlab-Velocity-Flat-Backlash-MicroDuck-HD1910",
+    env_cfg=make_backlash_variant(make_microduck_velocity_env_cfg(), HD1910_WALK_BACKLASH_ROBOT_CFG),
+    play_env_cfg=make_backlash_variant(make_microduck_velocity_env_cfg(play=True), HD1910_WALK_BACKLASH_ROBOT_CFG),
+    rl_cfg=MicroduckHD1910RlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
