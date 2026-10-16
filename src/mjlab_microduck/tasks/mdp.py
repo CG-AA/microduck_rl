@@ -4745,6 +4745,10 @@ class VelocityCommandCommandOnly(UniformVelocityCommand):
 
     def _resample_command(self, env_ids: torch.Tensor) -> None:
         super()._resample_command(env_ids)
+        self._resample_turn_in_place(env_ids)
+        self._resample_slow(env_ids)
+
+    def _resample_turn_in_place(self, env_ids: torch.Tensor) -> None:
         # Turn-in-place practice: for a fraction of envs, zero the linear velocity
         # and force a meaningful (away-from-zero) yaw command. Independent uniform
         # sampling almost never produces "lin≈0, |ang| large" (~2% of samples), so
@@ -4770,6 +4774,32 @@ class VelocityCommandCommandOnly(UniformVelocityCommand):
         # zero the command) and refresh the world-frame reference copy.
         self.is_standing_env[turn_ids] = False
         self.vel_command_w[turn_ids] = self.vel_command_b[turn_ids]
+
+    def _resample_slow(self, env_ids: torch.Tensor) -> None:
+        # Slow-straight practice: a fraction of envs creep on one axis (|v| in
+        # slow_speed_range, wz = 0). Independent uniform sampling makes "slow and
+        # straight" ~0.1 % of commands and the base forward-only bucket clamps
+        # vx ≥ 0.3, so creeping was effectively untrained and the policy folded
+        # every command below ~0.15 m/s into standing (hd1910_v1, 2026-10-16).
+        # Runs after the turn bucket, so an env drawn by both creeps.
+        p = getattr(self.cfg, "rel_slow_envs", 0.0)
+        if p <= 0.0:
+            return
+        r = torch.empty(len(env_ids), device=self.device)
+        slow_ids = env_ids[r.uniform_(0.0, 1.0) < p]
+        if len(slow_ids) == 0:
+            return
+        n = len(slow_ids)
+        lo, hi = self.cfg.slow_speed_range
+        mag = torch.empty(n, device=self.device).uniform_(lo, hi)
+        sign = torch.where(torch.empty(n, device=self.device).uniform_(0.0, 1.0) < 0.5, -1.0, 1.0)
+        lateral = torch.empty(n, device=self.device).uniform_(0.0, 1.0) < self.cfg.slow_lateral_frac
+        zero = torch.zeros_like(mag)
+        self.vel_command_b[slow_ids, 0] = torch.where(lateral, zero, sign * mag)
+        self.vel_command_b[slow_ids, 1] = torch.where(lateral, sign * mag, zero)
+        self.vel_command_b[slow_ids, 2] = 0.0
+        self.is_standing_env[slow_ids] = False
+        self.vel_command_w[slow_ids] = self.vel_command_b[slow_ids]
 
     def _debug_vis_impl(self, visualizer: "DebugVisualizer") -> None:
         batch = visualizer.env_idx
@@ -4811,6 +4841,12 @@ class VelocityCommandCommandOnlyCfg(UniformVelocityCommandCfg):
     # 0.4 (historical) means in-place yaw below 0.4 rad/s is never trained (standing
     # envs zero the whole command; uniform sampling never gives lin == 0).
     turn_in_place_min_frac: float = 0.4
+    # Fraction of envs commanded to creep on one axis (|v| in slow_speed_range,
+    # wz = 0) each resample; see _resample_slow. 0 = disabled (base behaviour).
+    rel_slow_envs: float = 0.0
+    slow_speed_range: tuple[float, float] = (0.05, 0.15)
+    # Share of the slow envs that creep sideways (vy) rather than forward/back (vx).
+    slow_lateral_frac: float = 0.25
 
     def build(self, env: ManagerBasedRlEnv) -> "VelocityCommandCommandOnly":
         return VelocityCommandCommandOnly(self, env)
@@ -5472,6 +5508,39 @@ def track_yaw_rate_fine(
     asset: Entity = env.scene[asset_cfg.name]
     cmd = env.command_manager.get_command(command_name)
     return torch.exp(-torch.square(cmd[:, 2] - asset.data.root_link_ang_vel_b[:, 2]) / std**2)
+
+
+def track_linear_velocity_fine(
+    env: ManagerBasedRlEnv,
+    std: float,
+    command_name: str,
+    tau_s: float = 0.5,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """xy-only Gaussian on an EMA of the body-frame linear velocity,
+    exp(-|cmd_xy - EMA(v_xy)|²/std²), ADDED next to the stock track_linear_velocity
+    (which stays as is).
+
+    Why (HD-1910 slow-command dead zone, 2026-10-16): with the stock term's std² = 0.1,
+    standing still at a 0.10 m/s command keeps 90 % of it (2·exp(-0.1) = 1.81 of 2.0), so
+    once standing envs are 25 % of the data and action_rate costs ~1.2/s the policy folds
+    every command below ~0.15 m/s into "stand" (hd1910_v1: 0.10 m/s → 0.000 m/s; the
+    250-iteration checkpoint, before the standing curriculum ramped, still walked at 0.1).
+    A std-0.10 term prices small errors (standing at 0.10 scores 0.37 instead of 1.0, a
+    +0.63/step margin for walking) without replacing the stock term's far-error gradient
+    (the velstand lesson in track_yaw_rate_fine). The EMA, tau_s ≈ two strides, prices the
+    DC error and lets the stride-cycle oscillation cancel, like head_pose_bias_penalty's."""
+    asset: Entity = env.scene[asset_cfg.name]
+    cmd = env.command_manager.get_command(command_name)[:, :2]
+    v = asset.data.root_link_lin_vel_b[:, :2]
+    if not hasattr(env, "_lin_vel_ema"):
+        env._lin_vel_ema = torch.zeros_like(v)
+    # Freshly reset envs start the average at their (near-zero) measured velocity.
+    fresh = env.episode_length_buf <= 1
+    env._lin_vel_ema[fresh] = v[fresh]
+    alpha = min(1.0, float(env.step_dt) / max(tau_s, 1e-6))
+    env._lin_vel_ema = (1.0 - alpha) * env._lin_vel_ema + alpha * v
+    return torch.exp(-torch.sum(torch.square(cmd - env._lin_vel_ema), dim=1) / std**2)
 
 
 def upright_body_cmd_relative(

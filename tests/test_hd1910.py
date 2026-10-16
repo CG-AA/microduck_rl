@@ -137,3 +137,56 @@ def test_hd1910_recipe_sets_spawn_height_without_touching_xl330_tasks():
     assert z("Mjlab-Velocity-Flat-MicroDuck") == (0.12, 0.13)
     lo, hi = hd1910_pose.HD1910_SPAWN_Z
     assert hd1910_pose.HD1910_TRUNK_Z_CONTACT < lo < hi < hd1910_pose.HD1910_TRUNK_Z_CONTACT + 0.02
+
+
+def test_hd1910_recipe_adds_fine_tracking_and_slow_bucket():
+    """The slow-command fix lives in the overlay: both HD-1910 tasks carry it, the XL330 task
+    does not, and the stock tracking term is untouched (the fine term is ADDED, not a swap)."""
+    from mjlab.tasks.registry import load_env_cfg
+    from mjlab_microduck.tasks import hd1910
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    for task in ("Mjlab-Velocity-Flat-MicroDuck-HD1910", "Mjlab-Velocity-Flat-Backlash-MicroDuck-HD1910"):
+        cfg = load_env_cfg(task)
+        fine = cfg.rewards["track_linear_velocity_fine"]
+        assert fine.func is microduck_mdp.track_linear_velocity_fine
+        assert fine.weight == hd1910.FINE_LIN_VEL_WEIGHT > 0
+        assert fine.params == {"std": hd1910.FINE_LIN_VEL_STD, "command_name": "twist", "tau_s": hd1910.FINE_LIN_VEL_TAU_S}
+        assert cfg.rewards["track_linear_velocity"].weight == 2.0
+        assert cfg.rewards["track_linear_velocity"].params["std"] == pytest.approx(math.sqrt(0.1))
+        tw = cfg.commands["twist"]
+        assert tw.rel_slow_envs == hd1910.SLOW_ENVS == 0.15
+        assert tuple(tw.slow_speed_range) == (0.05, 0.15) and tw.slow_lateral_frac == 0.25
+        assert tw.rel_turn_in_place_envs > 0 and tw.rel_standing_envs > 0  # the other buckets stay
+    xl = load_env_cfg("Mjlab-Velocity-Flat-MicroDuck")
+    assert "track_linear_velocity_fine" not in xl.rewards
+    assert xl.commands["twist"].rel_slow_envs == 0.0
+
+
+def test_track_linear_velocity_fine_prices_small_errors_through_an_ema():
+    """exp(-|cmd - EMA(v)|²/std²): matching the command scores 1, standing at 0.10 scores
+    exp(-1), the EMA (tau_s) ignores the stride oscillation, and a reset restarts it."""
+    from types import SimpleNamespace
+    from mjlab_microduck.tasks.mdp import track_linear_velocity_fine
+
+    n, std, tau_s, dt = 4, 0.10, 0.5, 0.02
+    cmd = torch.tensor([[0.10, 0.0, 0.0], [0.10, 0.0, 0.0], [0.0, 0.10, 0.0], [0.20, 0.0, 0.0]])
+    data = SimpleNamespace(root_link_lin_vel_b=torch.zeros(n, 3))
+    env = SimpleNamespace(scene={"robot": SimpleNamespace(data=data)},
+                          command_manager=SimpleNamespace(get_command=lambda name: cmd),
+                          episode_length_buf=torch.full((n,), 10), step_dt=dt)
+    # Steady state: env 0 tracks, env 1 stands, env 2 tracks sideways, env 3 stands at 0.20.
+    for k in range(200):
+        osc = 0.05 * math.sin(2 * math.pi * k * dt / 0.25)  # stride-cycle oscillation, 4 Hz
+        data.root_link_lin_vel_b = torch.tensor([[0.10 + osc, 0.0, 0.0], [0.0, 0.0, 0.0],
+                                                 [0.0, 0.10 + osc, 0.0], [0.0, 0.0, 0.0]])
+        r = track_linear_velocity_fine(env, std, "twist", tau_s)
+    assert r.shape == (n,)
+    assert r[0] > 0.95 and r[2] > 0.95, "the EMA must cancel the stride oscillation"
+    assert r[1] == pytest.approx(math.exp(-1.0), abs=0.02)
+    assert r[3] == pytest.approx(math.exp(-4.0), abs=0.01)
+    # A reset env restarts the average from its measured velocity, not from the old one.
+    env.episode_length_buf[0] = 0
+    data.root_link_lin_vel_b = torch.zeros(n, 3)
+    r = track_linear_velocity_fine(env, std, "twist", tau_s)
+    assert r[0] == pytest.approx(math.exp(-1.0), abs=0.02)
