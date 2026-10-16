@@ -4031,6 +4031,33 @@ def joint_vel_l2_when_standing(
     return is_standing_cmd * vel_sq
 
 
+def joint_torques_l2_when_standing(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+    command_name: str = "twist",
+    command_threshold: float = 0.01,
+) -> torch.Tensor:
+    """Penalise the leg actuators' squared torques only when the command is near zero.
+
+    Targets bracing (HD-1910 v2, 2026-10-16): standing at its default pose the policy
+    commanded both hip rolls 0.22 rad inward and both knees 0.14 rad, the feet could not
+    move, and the servos pushed against the floor for 0.12 / 0.08 N.m each, a third of the
+    HD-1910's 0.29 N.m continuous rating, while the joints sat within 0.01 rad of default,
+    so the pose reward saw nothing and no term priced it. Torque is what heats a servo.
+    Gated on the command so the gait is untaxed. Actuator indices: the 14 actuators exclude
+    the passive joints on every model, legs are 0-4 and 9-13 (tests/test_joint_layout.py).
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+
+    command = env.command_manager.get_command(command_name)
+    total_speed = torch.norm(command[:, :2], dim=1) + torch.abs(command[:, 2])
+    is_standing_cmd = (total_speed < command_threshold).float()
+
+    leg_actuators = list(range(0, 5)) + list(range(9, 14))
+    tau = asset.data.actuator_force[:, leg_actuators]
+    return is_standing_cmd * torch.sum(torch.square(tau), dim=-1)
+
+
 def foot_step_penalty_when_standing(
     env: ManagerBasedRlEnv,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,

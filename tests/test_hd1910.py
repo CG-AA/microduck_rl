@@ -158,9 +158,30 @@ def test_hd1910_recipe_adds_fine_tracking_and_slow_bucket():
         assert tw.rel_slow_envs == hd1910.SLOW_ENVS == 0.15
         assert tuple(tw.slow_speed_range) == (0.05, 0.15) and tw.slow_lateral_frac == 0.25
         assert tw.rel_turn_in_place_envs > 0 and tw.rel_standing_envs > 0  # the other buckets stay
+        stand = cfg.rewards["stand_torque"]
+        assert stand.func is microduck_mdp.joint_torques_l2_when_standing
+        assert stand.weight == hd1910.STAND_TORQUE_WEIGHT < 0  # a >= 0 cost needs a negative weight
     xl = load_env_cfg("Mjlab-Velocity-Flat-MicroDuck")
-    assert "track_linear_velocity_fine" not in xl.rewards
+    assert "track_linear_velocity_fine" not in xl.rewards and "stand_torque" not in xl.rewards
     assert xl.commands["twist"].rel_slow_envs == 0.0
+
+
+def test_joint_torques_l2_when_standing_prices_only_the_legs_at_zero_command():
+    from types import SimpleNamespace
+    from mjlab_microduck.tasks.mdp import joint_torques_l2_when_standing
+
+    tau = torch.zeros(3, 14)
+    tau[0, [1, 10]] = 0.12   # bracing hip rolls, standing
+    tau[0, [3, 12]] = 0.08   # bracing knees
+    tau[0, [5, 6]] = 0.5     # head torque must not count
+    tau[1, [1, 10]] = 0.12   # same torques, but walking
+    cmd = torch.tensor([[0.0, 0.0, 0.0], [0.2, 0.0, 0.0], [0.0, 0.0, 0.0]])
+    env = SimpleNamespace(scene={"robot": SimpleNamespace(data=SimpleNamespace(actuator_force=tau))},
+                          command_manager=SimpleNamespace(get_command=lambda name: cmd))
+    cost = joint_torques_l2_when_standing(env)
+    assert cost[0] == pytest.approx(2 * 0.12 ** 2 + 2 * 0.08 ** 2)
+    assert cost[1] == 0.0 and cost[2] == 0.0
+    assert (cost >= 0).all()
 
 
 def test_track_linear_velocity_fine_prices_small_errors_through_an_ema():

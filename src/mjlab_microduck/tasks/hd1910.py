@@ -38,10 +38,22 @@ from mjlab_microduck.tasks.microduck_velocity_env_cfg import MicroduckRlCfg
 # A fine xy term next to the stock one prices the small error; a slow-command
 # bucket supplies the data. Everything else of the recipe is untouched so the
 # comparison with v1 stays readable. See docs/hd1910.md.
-FINE_LIN_VEL_WEIGHT = 1.0   # a task term, fixed from step 0 (no new curriculum boundary)
+#
+# v2 (weight 1.0) walked at 0.10 m/s at iteration 1000 and had folded it back
+# into standing by 2000, when the standing share reached 25 % and the
+# action_rate tax -1.0; v2b doubles the term's margin instead of touching the
+# smoothness tax (a sim2real property we cannot measure yet).
+FINE_LIN_VEL_WEIGHT = 2.0   # a task term, fixed from step 0 (no new curriculum boundary)
 FINE_LIN_VEL_STD = 0.10     # the error we still care about: standing at 0.10 m/s scores exp(-1)
 FINE_LIN_VEL_TAU_S = 0.5    # EMA ≈ two strides: prices the DC error, not the stride oscillation
 SLOW_ENVS = 0.15            # share of envs that creep (0.05-0.15 m/s, one axis) each resample
+# -- Standing torque (v2b). With nothing pricing torque, v2 braced while standing:
+# hip rolls commanded 0.22 rad inward, knees 0.14 rad, feet pinned by friction,
+# 0.12 / 0.08 N.m per servo for no motion. Bracing's sum tau² over the legs is
+# ~0.05, so this weight makes it cost ~0.1/step against ~4/step of standing
+# reward: enough to drop a habit that buys nothing, not enough to forbid torque
+# where a push needs it. Gated on zero command, so the gait is untaxed.
+STAND_TORQUE_WEIGHT = -2.0
 
 
 def apply_hd1910_recipe(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
@@ -61,6 +73,12 @@ def apply_hd1910_recipe(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
     twist = deepcopy(cfg.commands["twist"])
     twist.rel_slow_envs = SLOW_ENVS
     cfg.commands["twist"] = twist
+    # Standing torque: the legs' sum tau² at zero command (>= 0, negative weight).
+    cfg.rewards["stand_torque"] = RewardTermCfg(
+        func=microduck_mdp.joint_torques_l2_when_standing,
+        weight=STAND_TORQUE_WEIGHT,
+        params={"command_name": "twist"},
+    )
     return cfg
 
 
