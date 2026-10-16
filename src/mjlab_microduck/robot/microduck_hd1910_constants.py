@@ -11,6 +11,11 @@ The actuator is the provisional HD-1910 BAM model (actuator/params/
 hd1910_provisional_m6.json): kt/R derived from the datasheet, XL330 friction and
 armature as placeholders, XL330 voltage control law with HD-1910 firmware limits.
 It is NOT a fit: replace it with bam.fit on a real servo before trusting sim2real.
+
+The robot stands in its own pose (robot/hd1910_pose.py: knee extended to -0.6,
+4.5 deg hip roll), not HOME_FRAME: on this servo's 0.29 N.m continuous rating
+the stock stand pose spends a third of the budget holding the knees and hip
+rolls still. The scene STAND keyframe and the CPU scripts read the same module.
 """
 
 import os
@@ -23,11 +28,10 @@ from mjlab_microduck.actuator import (
     HD1910BacklashEncoderBamActuatorCfg,
     HD1910FrictionDRBamActuatorCfg,
 )
+from mjlab_microduck.robot.hd1910_pose import init_state_joint_pos
 from mjlab_microduck.robot.microduck_constants import (
     _BAM_ACTUATOR_KWARGS,
-    BACKLASH_HOME_FRAME,
     FULL_COLLISION,
-    HOME_FRAME,
 )
 
 _ROBOT_DIR: Path = Path(os.path.dirname(__file__)) / "microduck_hd1910"
@@ -67,9 +71,22 @@ HD1910_BAM_ACTUATOR_KWARGS = {
 hd1910_actuators = HD1910FrictionDRBamActuatorCfg(**HD1910_BAM_ACTUATOR_KWARGS)
 hd1910_backlash_actuators = HD1910BacklashEncoderBamActuatorCfg(**HD1910_BAM_ACTUATOR_KWARGS)
 
+# Stand pose from robot/hd1910_pose.py (exact joint names as keys). The backlash
+# twin pins every passive backlash hinge at 0 FIRST: matching is first-match-wins
+# and an unanchored name would also hit passive_<joint>_backlash (see
+# microduck_constants.BACKLASH_HOME_FRAME).
+HD1910_HOME_FRAME = EntityCfg.InitialStateCfg(
+    joint_pos=init_state_joint_pos(),
+    joint_vel={".*": 0.0},
+)
+HD1910_BACKLASH_HOME_FRAME = EntityCfg.InitialStateCfg(
+    joint_pos={r".*_backlash$": 0.0, **HD1910_HOME_FRAME.joint_pos},
+    joint_vel={".*": 0.0},
+)
+
 HD1910_WALK_ROBOT_CFG = EntityCfg(
     spec_fn=get_hd1910_walk_spec,
-    init_state=HOME_FRAME,
+    init_state=HD1910_HOME_FRAME,
     collisions=(FULL_COLLISION,),
     articulation=EntityArticulationInfoCfg(
         actuators=(hd1910_actuators,),
@@ -79,7 +96,7 @@ HD1910_WALK_ROBOT_CFG = EntityCfg(
 
 HD1910_WALK_BACKLASH_ROBOT_CFG = EntityCfg(
     spec_fn=get_hd1910_walk_backlash_spec,
-    init_state=BACKLASH_HOME_FRAME,
+    init_state=HD1910_BACKLASH_HOME_FRAME,
     collisions=(FULL_COLLISION,),
     articulation=EntityArticulationInfoCfg(
         actuators=(hd1910_backlash_actuators,),

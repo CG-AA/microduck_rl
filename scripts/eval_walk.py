@@ -43,9 +43,17 @@ import mujoco
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[1]
-_spec = importlib.util.spec_from_file_location("infer_policy", REPO / "scripts" / "infer_policy.py")
-ip = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(ip)
+
+
+def _load(name):
+    spec = importlib.util.spec_from_file_location(name, REPO / "scripts" / f"{name}.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+ip = _load("infer_policy")
+st = _load("stand_torque")  # contact_height: spawn the robot on its soles whatever its default pose
 
 HARNESS_VERSION = 2
 DECIMATION = 4  # 50 Hz control on a 5 ms physics step, as in training
@@ -127,16 +135,17 @@ def build(args):
         str(xml), bam_model, 0.005, args.vin_drop_gain if args.vin_drop_gain > 0 else None, ip.BAM_VIN_MIN)
     policy = ip.PolicyInference(model, data, walking_onnx_path=args.walking, bam_ctrl=bam_ctrl, new_cmd_obs=True,
                                 use_projected_gravity=True,  # infer_policy default (--raw-accelerometer off)
-                                joint_vel_lag=getattr(args, "joint_vel_lag", JOINT_VEL_LAG))
+                                joint_vel_lag=getattr(args, "joint_vel_lag", JOINT_VEL_LAG),
+                                default_pose=ip.HD1910_DEFAULT_POSE if args.hd1910 else None)
     pose = None if getattr(args, "script_pose", False) else onnx_default_pose(policy.walking_session, names)
     if pose is None:
         policy.default_pose_source = "script"
-        print("default pose: scripts/infer_policy.py DEFAULT_POSE (not taken from the ONNX metadata)")
+        print("default pose: the script's (not taken from the ONNX metadata)")
     else:
         policy.default_pose = pose
         policy.default_pose_source = "onnx"
         print(f"default pose from the ONNX metadata: {np.round(pose, 4).tolist()}")
-    policy.spawn_z = SPAWN_Z
+    policy.spawn_z = st.contact_height(model, policy.default_pose) + 0.008  # soles 8 mm up, as 0.125 was for HOME
     policy.actuator_names = names
     policy.limits = actuator_limits(bam_model, getattr(args, "continuous", 0.29))
     policy.model_init = (model.dof_frictionloss.copy(), model.dof_damping.copy())

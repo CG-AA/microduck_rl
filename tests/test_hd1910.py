@@ -16,6 +16,7 @@ import torch
 import mjlab_microduck.tasks  # noqa: F401  (load tasks first: avoids the constants<->tasks import cycle)
 from bam.actuator import TorchBackend
 from bam.model import load_model
+from mjlab_microduck.robot import hd1910_pose
 from mjlab_microduck.robot import microduck_hd1910_constants as hd
 from mjlab_microduck.robot.microduck_constants import MICRODUCK_WALK_XML
 
@@ -121,3 +122,18 @@ def test_cpu_rehearsal_mirrors_hd1910_training_cfg():
                             json_path=str(repo / ip.HD1910_PARAMS_JSON), max_pwm=ip.HD1910_MAX_PWM)
     assert bam.kt.value == pytest.approx(0.62) and bam.actuator.max_pwm == pytest.approx(0.98)
     assert bam.actuator.max_current is None
+    assert np.allclose(ip.HD1910_DEFAULT_POSE, hd1910_pose.HD1910_DEFAULT_POSE)
+
+
+def test_hd1910_recipe_sets_spawn_height_without_touching_xl330_tasks():
+    """The overlay (tasks/hd1910.py) spawns the taller stand pose on its soles; the base
+    velocity task must keep HOME's (0.12, 0.13): base templates share cfg objects across
+    make() calls, so a careless overlay would leak into the XL330 tasks."""
+    from mjlab.tasks.registry import load_env_cfg
+
+    z = lambda task: tuple(load_env_cfg(task).events["reset_base"].params["pose_range"]["z"])
+    assert z("Mjlab-Velocity-Flat-MicroDuck-HD1910") == tuple(hd1910_pose.HD1910_SPAWN_Z)
+    assert z("Mjlab-Velocity-Flat-Backlash-MicroDuck-HD1910") == tuple(hd1910_pose.HD1910_SPAWN_Z)
+    assert z("Mjlab-Velocity-Flat-MicroDuck") == (0.12, 0.13)
+    lo, hi = hd1910_pose.HD1910_SPAWN_Z
+    assert hd1910_pose.HD1910_TRUNK_Z_CONTACT < lo < hi < hd1910_pose.HD1910_TRUNK_Z_CONTACT + 0.02

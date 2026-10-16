@@ -285,7 +285,7 @@ from mjlab_microduck.robot.microduck_hd1910_constants import (
     HD1910_WALK_BACKLASH_ROBOT_CFG,
     HD1910_WALK_ROBOT_CFG,
 )
-from .hd1910 import MicroduckHD1910RlCfg, make_hd1910_variant
+from .hd1910 import MicroduckHD1910RlCfg, apply_hd1910_recipe, make_hd1910_variant
 
 register_mjlab_task(
     task_id="Mjlab-Velocity-Flat-MicroDuck-HD1910",
@@ -294,10 +294,13 @@ register_mjlab_task(
     rl_cfg=MicroduckHD1910RlCfg,
     runner_cls=MicroduckOnPolicyRunner,
 )
+# The backlash twin: make_backlash_variant swaps the robot and the encoder obs,
+# then the HD-1910 recipe (spawn height, and whatever else tasks/hd1910.py adds).
 register_mjlab_task(
     task_id="Mjlab-Velocity-Flat-Backlash-MicroDuck-HD1910",
-    env_cfg=make_backlash_variant(make_microduck_velocity_env_cfg(), HD1910_WALK_BACKLASH_ROBOT_CFG),
-    play_env_cfg=make_backlash_variant(make_microduck_velocity_env_cfg(play=True), HD1910_WALK_BACKLASH_ROBOT_CFG),
+    env_cfg=apply_hd1910_recipe(make_backlash_variant(make_microduck_velocity_env_cfg(), HD1910_WALK_BACKLASH_ROBOT_CFG)),
+    play_env_cfg=apply_hd1910_recipe(
+        make_backlash_variant(make_microduck_velocity_env_cfg(play=True), HD1910_WALK_BACKLASH_ROBOT_CFG)),
     rl_cfg=MicroduckHD1910RlCfg,
     runner_cls=MicroduckOnPolicyRunner,
 )

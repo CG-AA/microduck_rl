@@ -51,6 +51,8 @@ BAM_STIFF_SOLIMP_FRICTION = (0.99, 0.9999, 0.001, 0.5, 2.0)
 # model: datasheet kt/R, XL330 friction; the rest of the DR is the XL330's.
 HD1910_XML = "src/mjlab_microduck/robot/microduck_hd1910/scene_walk_hd1910.xml"
 HD1910_PARAMS_JSON = "src/mjlab_microduck/actuator/params/hd1910_provisional_m6.json"
+# The HD-1910 robot stands in its own pose (knee extended, 4.5 deg roll); the module is numpy-only.
+from mjlab_microduck.robot.hd1910_pose import HD1910_DEFAULT_POSE, HD1910_SPAWN_Z_CPU  # noqa: E402
 HD1910_KP_FW = 156.0              # same 0.55 N.m/rad stiffness as the XL330 at 7.4 V
 HD1910_MAX_PWM = 0.98             # reg 16 max torque 980 x 0.1 %
 HD1910_MAX_CURRENT = None         # Feetech protection current unloads, it does not clamp
@@ -71,14 +73,15 @@ def load_bam_model(kp_fw: float, vin: float, max_current, json_path=None, max_pw
     return bam_model
 
 
-def load_mujoco_with_bam(xml_path: str, bam_model, timestep: float, vin_drop_gain, vin_min):
+def load_mujoco_with_bam(xml_path: str, bam_model, timestep: float, vin_drop_gain, vin_min, spec=None):
     """Load the scene and hand every non-passive actuator to bam.mujoco.MujocoController.
 
     Mirrors bam.mjlab.BamActuator.edit_spec (what warp does at training time):
     position actuators -> torque motors with the voltage-bounded forcerange,
     joint damping/frictionloss zeroed (BAM rewrites them every step), stiff
     friction constraint. Armature is set on the dofs by MujocoController.
-    Returns (model, data, bam_ctrl, actuator_names).
+    Pass an already-edited `spec` (e.g. a robot XML given a floor) instead of
+    xml_path. Returns (model, data, bam_ctrl, actuator_names).
     """
     from bam.mujoco import MujocoController
 
@@ -86,7 +89,7 @@ def load_mujoco_with_bam(xml_path: str, bam_model, timestep: float, vin_drop_gai
     R = bam_model.R.value
     force_limit = bam_model.actuator.vin * kt / R
 
-    spec = mujoco.MjSpec.from_file(xml_path)
+    spec = spec if spec is not None else mujoco.MjSpec.from_file(xml_path)
     names = []
     for act in spec.actuators:
         tgt = act.target
@@ -1403,6 +1406,7 @@ def main():
         kick_duration=args.kick_duration,
         roulade_duration=args.roulade_duration,
         joint_vel_lag=args.joint_vel_lag,
+        default_pose=HD1910_DEFAULT_POSE if args.hd1910 else None,
     )
     policy.set_vel_cmd(args.lin_vel_x, args.lin_vel_y, args.ang_vel_z)
 
@@ -1438,7 +1442,8 @@ def main():
     qpos_adr = model.jnt_qposadr[freejoint_id]
     data.qpos[qpos_adr + 0] = 0.0
     data.qpos[qpos_adr + 1] = 0.0
-    data.qpos[qpos_adr + 2] = 0.1385 if args.roller else 0.125  # rollers add 13.5mm height
+    # rollers add 13.5 mm of height; the HD-1910 stand pose is ~9 mm taller than HOME
+    data.qpos[qpos_adr + 2] = HD1910_SPAWN_Z_CPU if args.hd1910 else (0.1385 if args.roller else 0.125)
     data.qpos[qpos_adr + 3:qpos_adr + 7] = [1, 0, 0, 0]
     for i, qpos_idx in enumerate(policy.joint_qpos_indices):
         data.qpos[qpos_idx] = policy.default_pose[i]

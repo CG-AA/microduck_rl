@@ -151,7 +151,11 @@ def test_onnx_metadata_joint_layout(home):
     meta = ort.InferenceSession(onnx, providers=["CPUExecutionProvider"]).get_modelmeta().custom_metadata_map
     assert meta["joint_names"].split(",") == CANONICAL
     exported = [float(x) for x in meta["default_joint_pos"].split(",")]  # rounded to 3 decimals at export
-    np.testing.assert_allclose(exported, home, atol=5e-4)
+    # A policy carries the stand pose it was trained on: the HD-1910 pose, or HOME_FRAME for
+    # policies exported before 2026-10-16 (hd1910_v1). Either way it must be one of the two.
+    candidates = {"HD1910 init_state": home, "HOME_FRAME": _resolve(md.HOME_FRAME)}
+    matches = [n for n, p in candidates.items() if np.allclose(exported, p, atol=5e-4)]
+    assert matches, f"ONNX default_joint_pos {np.round(exported, 4).tolist()} is neither the HD-1910 stand pose nor HOME"
     if "observation_names" in meta:
         obs = meta["observation_names"].split(",")
         assert obs and obs.index("joint_pos") < obs.index("joint_vel") < obs.index("actions")
@@ -208,7 +212,13 @@ def test_scene_stand_keyframe_matches_init_state(ip, home):
     # The backlash HOME must pin passive_*_backlash first: HOME's unanchored patterns would
     # otherwise push a +-1 deg hinge to the servo's home angle.
     assert next(iter(hd.HD1910_WALK_BACKLASH_ROBOT_CFG.init_state.joint_pos)) == r".*_backlash$"
-    assert hd.HD1910_WALK_ROBOT_CFG.init_state == md.HOME_FRAME  # same body, same home as stock
+    # The HD-1910 robot stands in its own pose (robot/hd1910_pose.py), which every consumer reads
+    # from that module; the stock HOME is a different pose.
+    from mjlab_microduck.robot.hd1910_pose import HD1910_DEFAULT_POSE
+    np.testing.assert_allclose(home, HD1910_DEFAULT_POSE, atol=1e-6)
+    np.testing.assert_allclose(_resolve(hd.HD1910_WALK_BACKLASH_ROBOT_CFG.init_state), HD1910_DEFAULT_POSE, atol=1e-6)
+    assert not np.allclose(home, _resolve(md.HOME_FRAME), atol=1e-3)
+    assert hd.HD1910_WALK_ROBOT_CFG.init_state is not md.HOME_FRAME
     # Stock side: DEFAULT_POSE (CPU rehearsal), HOME_FRAME (training) and both STAND keyframes agree.
     stock_home = _resolve(md.HOME_FRAME)
     np.testing.assert_allclose(ip.DEFAULT_POSE, stock_home, atol=1e-4)
