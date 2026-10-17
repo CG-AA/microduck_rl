@@ -325,3 +325,16 @@ def test_the_cli_refuses_a_missing_video(tmp_path):
             repo="someone/microduck-bow", kind="episodic", onnx=str(policy),
             duration_s=4.0, video=str(tmp_path / "nope.mp4"), dry_run=True,
         ))
+
+
+def test_the_servos_field_follows_the_training_task():
+    """An HD-1910 policy runs at another stiffness and stand pose: its manifest must not claim XL330."""
+    assert m.servos_for("Mjlab-Velocity-Flat-MicroDuck-HD1910") == "hd1910"
+    assert m.servos_for(None, "logs/rsl_rl/velocity_hd1910/2026-10-16_23-17-42_hd1910_v2b/model_5500.pt") == "hd1910"
+    assert m.servos_for("Mjlab-Velocity-Flat-MicroDuck", None) == "xl330" and m.servos_for() == "xl330"
+    built = m.build_manifest(name="walk", kind="perpetual", description="d", servos="hd1910")
+    assert built["robot"]["servos"] == "hd1910" and built["robot"]["model"] == "microduck"
+    assert m.ROBOT["servos"] == "xl330"  # the module constant is not mutated
+    m.validate_manifest(built)
+    with pytest.raises(m.ManifestError, match="servos"):
+        m.build_manifest(name="walk", kind="perpetual", description="d", servos="sts3215")

@@ -26,6 +26,18 @@ MODEL_API = 1
 OBS_LEN = 61
 ACTION_LEN = 14
 ROBOT: dict[str, Any] = {"model": "microduck", "hw_rev": 1, "servos": "xl330", "control_hz": 50}
+# Display-only for the daemon, but the one field that says which servo model a policy was trained on:
+# an HD-1910 policy is trained at another stiffness and pose and is not an XL330 policy.
+SERVOS: tuple[str, ...] = ("xl330", "hd1910")
+
+
+def servos_for(task_id: str | None = None, run_path: str | None = None) -> str:
+    """The servo a policy was trained on, from its task id or its checkpoint path (ONNX metadata
+    `run_path`, e.g. logs/rsl_rl/velocity_hd1910/...). Default the stock XL330."""
+    for hint in (task_id, run_path):
+        if hint and "hd1910" in hint.lower():
+            return "hd1910"
+    return "xl330"
 
 # The one `.onnx` a repo carries. The daemon takes the sole `.onnx` in a repo and refuses several.
 POLICY_FILE = "policy.onnx"
@@ -105,6 +117,7 @@ def build_manifest(
     command_help: dict[str, Any] | None = None,
     training: dict[str, Any] | None = None,
     eval: dict[str, Any] | None = None,
+    servos: str = "xl330",
 ) -> dict[str, Any]:
     """A single-policy manifest the daemon loads without surprises.
 
@@ -145,6 +158,8 @@ def build_manifest(
         raise ManifestError(f"action_scale {action_scale} is outside (0, 2]")
     if len(idle) != 3:
         raise ManifestError("idle is a 3-vector twist")
+    if servos not in SERVOS:
+        raise ManifestError(f"servos must be one of {SERVOS}, not {servos!r}")
 
     command: dict[str, Any] = {
         "encoding": "constant",
@@ -161,7 +176,7 @@ def build_manifest(
         "model_api": MODEL_API,
         "obs_len": OBS_LEN,
         "action_len": ACTION_LEN,
-        "robot": dict(ROBOT),
+        "robot": {**ROBOT, "servos": servos},
         "name": name,
         "kind": kind,
         "entry_pose": entry_pose,
@@ -263,6 +278,17 @@ def inspect_onnx(path: Path) -> OnnxShape:
         obs_len=last_dim(inputs[0]),
         action_len=last_dim(graph.output[0]),
     )
+
+
+def onnx_run_path(path: Path) -> str | None:
+    """The `run_path` metadata scripts/export.py writes (the checkpoint it came from), if any."""
+    import onnx
+
+    try:
+        model = onnx.load(str(path), load_external_data=False)
+    except Exception:
+        return None
+    return {p.key: p.value for p in model.metadata_props}.get("run_path")
 
 
 def check_onnx(path: Path) -> OnnxShape:

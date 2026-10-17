@@ -178,6 +178,7 @@ def run(cfg: PublishConfig) -> int:
             slot=cfg.slot,
             command_help=command_help,
             training=training,
+            servos=m.servos_for(training.get("task_id"), m.onnx_run_path(onnx_path)),
         )
         m.validate_manifest(manifest)
 
