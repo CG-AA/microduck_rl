@@ -211,3 +211,60 @@ def test_track_linear_velocity_fine_prices_small_errors_through_an_ema():
     data.root_link_lin_vel_b = torch.zeros(n, 3)
     r = track_linear_velocity_fine(env, std, "twist", tau_s)
     assert r[0] == pytest.approx(math.exp(-1.0), abs=0.02)
+
+
+def test_hd1910_v2c_levers_and_servo_dr():
+    """v2c: the forward-only bucket is off, standing torque is priced 10x, and the servo DR is wide and
+    per-env on both HD-1910 tasks, while the XL330 task keeps the stock (0.9, 1.1) ranges and no gain DR."""
+    from mjlab.tasks.registry import load_env_cfg
+    from mjlab_microduck.tasks import hd1910
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    assert hd1910.STAND_TORQUE_WEIGHT == -20.0 and hd1910.FORWARD_ENVS == 0.0
+    for task in ("Mjlab-Velocity-Flat-MicroDuck-HD1910", "Mjlab-Velocity-Flat-Backlash-MicroDuck-HD1910"):
+        cfg = load_env_cfg(task)
+        assert cfg.commands["twist"].rel_forward_envs == 0.0
+        assert cfg.rewards["stand_torque"].weight == -20.0
+        assert tuple(cfg.events["randomize_joint_friction"].params["scale_range"]) == hd1910.FRICTION_SCALE_RANGE == (0.5, 1.5)
+        assert tuple(cfg.events["randomize_armature"].params["ranges"]) == hd1910.ARMATURE_SCALE_RANGE == (0.5, 1.5)
+        gains = cfg.events["randomize_motor_gains"]
+        assert gains.func is microduck_mdp.randomize_bam_gain_scale and gains.mode == "reset"
+        assert tuple(gains.params["kp_range"]) == hd1910.KP_SCALE_RANGE == (0.7, 1.4)
+        assert tuple(gains.params["kd_range"]) == (1.0, 1.0)
+    xl = load_env_cfg("Mjlab-Velocity-Flat-MicroDuck")
+    assert xl.commands["twist"].rel_forward_envs == pytest.approx(0.2)
+    assert tuple(xl.events["randomize_joint_friction"].params["scale_range"]) == (0.9, 1.1)
+    assert tuple(xl.events["randomize_armature"].params["ranges"]) == (0.9, 1.1)
+    assert "randomize_motor_gains" not in xl.events
+
+
+def test_randomize_bam_gain_scale_spans_its_range():
+    """One draw per env (not a mean of 14 per-joint draws, which collapses (0.7, 1.4) to ~1.05 +- 0.1),
+    restored before each draw so it never accumulates."""
+    import types
+    import torch
+    from bam.mjlab import BamActuator
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    class FakeBam(BamActuator):
+        def __init__(self, n):  # skip BamActuator's init: only the gain bookkeeping is exercised
+            self.kp_scale = torch.ones(n, 1)
+            self.kd_scale = torch.ones(n, 1)
+            self.default_kp_scale = self.kp_scale.clone()
+            self.default_kd_scale = self.kd_scale.clone()
+
+    n = 4096
+    act = FakeBam(n)
+    asset = types.SimpleNamespace(actuators=[act])
+    env = types.SimpleNamespace(num_envs=n, device="cpu", scene={"robot": asset})
+    torch.manual_seed(0)
+    microduck_mdp.randomize_bam_gain_scale(env, None, kp_range=(0.7, 1.4))
+    kp = act.kp_scale.squeeze(1)
+    assert kp.min() >= 0.7 and kp.max() <= 1.4
+    assert kp.min() < 0.72 and kp.max() > 1.38  # the whole range, not a collapsed mean
+    assert kp.std() == pytest.approx(0.7 / math.sqrt(12), rel=0.05)
+    assert torch.all(act.kd_scale == 1.0)
+    ids = torch.arange(0, 10)
+    before = act.kp_scale[10:].clone()
+    microduck_mdp.randomize_bam_gain_scale(env, ids, kp_range=(1.0, 1.0))
+    assert torch.all(act.kp_scale[:10] == 1.0) and torch.equal(act.kp_scale[10:], before)

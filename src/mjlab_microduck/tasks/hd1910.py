@@ -25,7 +25,8 @@ from dataclasses import replace
 
 from mjlab.entity import EntityCfg
 from mjlab.envs import ManagerBasedRlEnvCfg
-from mjlab.managers import RewardTermCfg
+from mjlab.managers import EventTermCfg, RewardTermCfg
+from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 from mjlab_microduck.robot.hd1910_pose import HD1910_SPAWN_Z
 from mjlab_microduck.robot.microduck_hd1910_constants import HD1910_WALK_ROBOT_CFG
@@ -53,7 +54,24 @@ SLOW_ENVS = 0.15            # share of envs that creep (0.05-0.15 m/s, one axis)
 # ~0.05, so this weight makes it cost ~0.1/step against ~4/step of standing
 # reward: enough to drop a habit that buys nothing, not enough to forbid torque
 # where a push needs it. Gated on zero command, so the gait is untaxed.
-STAND_TORQUE_WEIGHT = -2.0
+# v2c (2026-10-17) raises it tenfold: at -2.0 the term logged -0.03 to -0.05, ~1 %
+# of the standing reward, and bracing survived in two of v2b's three checkpoints.
+STAND_TORQUE_WEIGHT = -20.0
+# -- v2c: the inherited mjlab rel_forward_envs = 0.2 clamps a fifth of the commands
+# to vx >= 0.3 m/s. It shifted the vx normalizer mean to +0.04, which put +0.10 m/s
+# nearest the standing cluster and made forward the last slow axis to come back.
+# Uniform sampling still gives 0.3-0.4 m/s to 12.5 % of envs.
+FORWARD_ENVS = 0.0
+# -- v2c: servo DR for a servo that has not been measured. Friction and rotor
+# inertia are borrowed from the XL330, and the P-register -> duty/rad mapping is
+# unknown (and coarse: P ~ 3 if it scales like the STS3215). The sensitivity
+# matrix (scripts/sensitivity.py, docs/hd1910.md) found the gain the dominant
+# axis (v2b falls at x0.7, cannot stand at x4) and friction second (x2 fails).
+# Ranges by plausibility, narrowed after the bench fit. Training's stock ranges
+# are (0.9, 1.1) for both and no gain randomization.
+FRICTION_SCALE_RANGE = (0.5, 1.5)
+ARMATURE_SCALE_RANGE = (0.5, 1.5)
+KP_SCALE_RANGE = (0.7, 1.4)
 
 
 def apply_hd1910_recipe(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
@@ -72,12 +90,25 @@ def apply_hd1910_recipe(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
     )
     twist = deepcopy(cfg.commands["twist"])
     twist.rel_slow_envs = SLOW_ENVS
+    twist.rel_forward_envs = FORWARD_ENVS
     cfg.commands["twist"] = twist
     # Standing torque: the legs' sum tau² at zero command (>= 0, negative weight).
     cfg.rewards["stand_torque"] = RewardTermCfg(
         func=microduck_mdp.joint_torques_l2_when_standing,
         weight=STAND_TORQUE_WEIGHT,
         params={"command_name": "twist"},
+    )
+    # Servo DR (v2c): widen the two borrowed parameters, add a per-env gain factor.
+    friction = deepcopy(cfg.events["randomize_joint_friction"])
+    friction.params["scale_range"] = FRICTION_SCALE_RANGE
+    cfg.events["randomize_joint_friction"] = friction
+    armature = deepcopy(cfg.events["randomize_armature"])
+    armature.params["ranges"] = ARMATURE_SCALE_RANGE
+    cfg.events["randomize_armature"] = armature
+    cfg.events["randomize_motor_gains"] = EventTermCfg(
+        func=microduck_mdp.randomize_bam_gain_scale,
+        mode="reset",
+        params={"asset_cfg": SceneEntityCfg("robot"), "kp_range": KP_SCALE_RANGE, "kd_range": (1.0, 1.0)},
     )
     return cfg
 

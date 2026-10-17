@@ -3336,6 +3336,35 @@ def randomize_delayed_actuator_gains(
         )
 
 
+def randomize_bam_gain_scale(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    kp_range: tuple[float, float],
+    kd_range: tuple[float, float] = (1.0, 1.0),
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+):
+    """One uniform firmware-gain factor per env and reset, spanning kp_range (NON-accumulating).
+
+    ``randomize_delayed_actuator_gains`` averages 14 per-joint draws into its per-env scalar, so a
+    (0.7, 1.4) range lands within about +-0.1 of 1.05: almost no randomization. This draws the
+    scalar directly, so the whole range is trained. BAM actuators only (``set_gains`` per env).
+    """
+    from bam.mjlab import BamActuator
+
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.int)
+    else:
+        env_ids = env_ids.to(env.device, dtype=torch.int)
+    asset: Entity = env.scene[asset_cfg.name]
+    n = len(env_ids)
+    kp = torch.rand(n, 1, device=env.device) * (kp_range[1] - kp_range[0]) + kp_range[0]
+    kd = torch.rand(n, 1, device=env.device) * (kd_range[1] - kd_range[0]) + kd_range[0]
+    for actuator in asset.actuators:
+        if isinstance(actuator, BamActuator):
+            actuator.reset_gains(env_ids)
+            actuator.set_gains(env_ids, kp_scale=kp, kd_scale=kd)
+
+
 @requires_model_fields("dof_frictionloss", "dof_damping")
 def expand_bam_friction_fields(
     env: ManagerBasedRlEnv,
