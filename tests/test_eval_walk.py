@@ -164,3 +164,130 @@ def test_rollout_rows_keep_v1_keys(ev):
     assert 3.0 <= row["lag_mean"] <= 6.0
     assert row["fell_at"] is None
     assert policy.walking_session.get_providers() == ["CPUExecutionProvider"]
+
+
+# ---- iteration 2: servo-model overrides, backlash encoder view, sensitivity table ---------------------------
+
+def test_bam_override_parsing(ev):
+    specs = ev.parse_bam_overrides(["kt*=1.2", "R=3.0", "friction*=0.5", " kp *= 2 "])
+    assert specs == [("kt", "*", 1.2), ("R", "=", 3.0), ("friction", "*", 0.5), ("kp", "*", 2.0)]
+    assert ev.parse_bam_overrides(None) == [] and ev.parse_bam_overrides([]) == []
+    with pytest.raises(ValueError, match="use --vin"):
+        ev.parse_bam_overrides(["vin=6.5"])
+    with pytest.raises(ValueError, match="KEY=VALUE"):
+        ev.parse_bam_overrides(["kt"])
+
+
+def test_bam_overrides_mutate_the_model(ev):
+    from bam.model import load_model
+    m = load_model(str(REPO / ev.ip.HD1910_PARAMS_JSON))
+    m.actuator.kp = 156.0
+    base = {n: p.value for n, p in m.get_parameters().items()}
+    changed = ev.apply_bam_overrides(m, ev.parse_bam_overrides(["friction*=0.5", "kt=0.7", "kp*=2"]))
+    for name in ev.FRICTION_COEFFS:
+        assert m.get_parameters()[name].value == pytest.approx(0.5 * base[name])
+    for name in ("dtheta_stribeck", "alpha", "friction_viscous", "R", "armature"):  # friction_scale leaves these
+        assert m.get_parameters()[name].value == base[name]
+    assert m.kt.value == 0.7 and m.actuator.kp == 312.0
+    assert changed["kt"] == (pytest.approx(base["kt"]), 0.7)
+    with pytest.raises(ValueError, match="unknown key"):
+        ev.apply_bam_overrides(m, [("not_a_param", "*", 2.0)])
+
+
+def _ns(onnx, **kw):
+    import argparse
+    return argparse.Namespace(walking=onnx, hd1910=True, vin=7.4, vin_drop_gain=0.1, kp_fw=None, continuous=0.29, **kw)
+
+
+def test_bam_overrides_reach_the_controller(ev):
+    onnx = _find_onnx()
+    if onnx is None:
+        pytest.skip("no runs/hd1910_*.onnx")
+    ref = ev.build(_ns(onnx))
+    bam_model, model, data, bam_ctrl, policy = ev.build(
+        _ns(onnx, bam=["kt*=1.2", "armature*=2", "kp*=2", "friction*=0.5"]))
+    kt0, kt = ref[0].kt.value, bam_model.kt.value
+    assert kt == pytest.approx(1.2 * kt0) and bam_ctrl.model is bam_model
+    assert model.dof_armature[bam_ctrl.dof_indexes] == pytest.approx(2 * ref[1].dof_armature[ref[3].dof_indexes])
+    assert model.actuator_forcerange[0, 1] == pytest.approx(7.4 * kt / bam_model.R.value)  # read after the override
+    assert policy.limits["duty_per_rad"] == pytest.approx(2 * ref[4].limits["duty_per_rad"])
+    assert policy.bam_resolved["friction_base"] == pytest.approx(0.5 * ref[4].bam_resolved["friction_base"])
+    assert set(policy.bam_overrides) >= {"kt", "armature", "kp", *ev.FRICTION_COEFFS}
+
+
+def test_backlash_encoder_view(ev):
+    onnx = _find_onnx()
+    if onnx is None:
+        pytest.skip("no runs/hd1910_*.onnx")
+    bam_model, model, data, bam_ctrl, policy = ev.build(_ns(onnx, backlash=True))
+    assert type(bam_ctrl).__name__ == "BacklashEncoderController"
+    ev.reset(model, data, bam_ctrl, policy)
+    j = 3  # left knee
+    b_adr = policy.backlash_qpos_indices[j]
+    assert model.joint(int(model.actuator_trnid[j, 0])).name == "left_knee"
+    assert b_adr == bam_ctrl.backlash_qpos_indexes[j]
+    data.qpos[b_adr] = 0.01
+    data.qvel[policy.backlash_qvel_indices[j]] = 0.5
+    mujoco.mj_forward(model, data)
+    servo = data.qpos[policy.joint_qpos_indices]
+    np.testing.assert_allclose(policy.get_joint_pos_relative()[j], servo[j] + 0.01 - policy.default_pose[j], atol=1e-6)
+    policy.joint_vel_lag = 0
+    assert policy.get_joint_vel()[j] == pytest.approx(data.qvel[policy.joint_qvel_indices[j]] + 0.5, abs=1e-6)
+    # The firmware loop reads servo + backlash: with the target at the servo angle, the knee is driven
+    # back by the 0.01 rad of play (duty = -0.01 * duty_per_rad; torque = kt * V / R with dq = 0).
+    target = bam_ctrl.q_target
+    target[:] = servo
+    data.qvel[:] = 0.0
+    bam_ctrl.vin_drop_gain = None
+    bam_ctrl.update()
+    act = bam_model.actuator
+    expected = -0.01 * act.kp * act.error_gain * act.vin * bam_model.kt.value / bam_model.R.value
+    assert data.ctrl[bam_ctrl.act_indexes[j]] == pytest.approx(expected, rel=1e-6)
+    assert bam_ctrl.q_target is target  # the array control_step writes into survives update()
+    np.testing.assert_allclose(target, servo)
+    ev.reset(model, data, bam_ctrl, policy)
+    delay = ev.DelayLine(policy.default_pose, ev.ACTION_DELAY, np.random.default_rng(0))
+    rows = ev.run([("stand", 0.6, 0.0, 0.0, 0.0)], bam_model, model, data, bam_ctrl, policy, delay=delay)
+    assert rows[0]["fell_at"] is None
+
+
+def _sens():
+    spec = importlib.util.spec_from_file_location("sensitivity", REPO / "scripts" / "sensitivity.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _synthetic_doc(fwd10, legs, fell=None):
+    """A minimal harness-v2 JSON: the schedule rows gate_rows reads, plus one push rollout."""
+    sched = [dict(segment="stand", cmd=[0, 0, 0], fell_at=None, mean=[0.0, 0.0, 0.0],
+                  torque_mean_abs_settled={"left_knee": legs / 2, "right_knee": legs / 2, "head_pitch": 0.01}),
+             dict(segment="fwd 0.10", cmd=[0.1, 0, 0], fell_at=None, mean=[fwd10, 0, 0]),
+             dict(segment="back 0.10", cmd=[-0.1, 0, 0], fell_at=None, mean=[-0.1, 0, 0]),
+             dict(segment="left 0.10", cmd=[0, 0.1, 0], fell_at=None, mean=[0, 0.1, 0]),
+             dict(segment="fwd 0.20", cmd=[0.2, 0, 0], fell_at=None, mean=[0.2, 0, 0]),
+             dict(segment="fwd 0.30", cmd=[0.3, 0, 0], fell_at=None, mean=[0.3, 0, 0]),
+             dict(segment="turn +1.0", cmd=[0, 0, 1], fell_at=None, mean=[0, 0, 1.0]),
+             dict(segment="turn -1.0", cmd=[0, 0, -1], fell_at=None, mean=[0, 0, -1.0])]
+    push = [dict(segment="push walk", cmd=[0.1, 0, 0], fell_at=fell, mean=[0.1, 0, 0])]
+    return dict(args={"continuous": 0.29}, summary=dict(schedule=sched, push=push, steps=[], push_stand=[]),
+                replicas=dict(schedule=[sched], push=[push]))
+
+
+def test_sensitivity_table_and_verdicts(tmp_path):
+    sens = _sens()
+    base = tmp_path / "base.json"
+    base.write_text(json.dumps(_synthetic_doc(0.0, 0.6)))
+    (tmp_path / "nominal.json").write_text(json.dumps(_synthetic_doc(0.095, 0.30)))
+    (tmp_path / "kp_x0.7.json").write_text(json.dumps(_synthetic_doc(0.08, 0.30, fell=6.5)))
+    (tmp_path / "friction_x1.5.json").write_text(json.dumps(_synthetic_doc(0.09, 0.40)))
+    (tmp_path / "kp_x0.5.json").write_text(json.dumps(_synthetic_doc(0.01, 0.30)))
+    conds = [("nominal", []), ("kp_x0.7", []), ("friction_x1.5", []), ("kp_x0.5", []), ("absent", [])]
+    text, verdicts = sens.table(tmp_path, base, conds)
+    assert verdicts == {"nominal": "robust", "kp_x0.7": "fails", "friction_x1.5": "degraded", "kp_x0.5": "fails"}
+    assert (tmp_path / "table.md").read_text() == text
+    line = {l.split(" | ")[0].lstrip("| "): l for l in text.splitlines() if l.startswith("| ")}
+    assert "| push x1 |" in line["kp_x0.7"] and "0.080" in line["kp_x0.7"]
+    assert "0.010 ✗" in line["kp_x0.5"] and "fwd 0.10 vx" in line["kp_x0.5"]
+    assert "missing" in line["absent"]
+    assert "**fails** (2): kp_x0.7, kp_x0.5" in text

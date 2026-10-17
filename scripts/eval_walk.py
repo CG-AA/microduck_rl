@@ -122,6 +122,69 @@ def onnx_default_pose(session, names):
     return np.array([by_name[n] for n in names], dtype=np.float32)
 
 
+# Training's friction_scale (actuator/friction_dr_bam.py) multiplies BAM's velocity-independent friction
+# budget, which is linear in exactly these coefficients; dtheta_stribeck, alpha and friction_viscous are not
+# scaled. `--bam friction*=F` reproduces friction_scale = F.
+FRICTION_COEFFS = ("friction_base", "friction_stribeck", "load_friction_motor", "load_friction_external",
+                   "load_friction_motor_stribeck", "load_friction_external_stribeck",
+                   "load_friction_motor_quad", "load_friction_external_quad")
+ACTUATOR_KEYS = ("kp", "max_pwm", "error_gain")  # plain attributes of bam_model.actuator
+
+
+def parse_bam_overrides(items):
+    """['kt*=1.2', 'friction*=0.5', 'R=3.0'] -> [(key, op, value)], op '*' (multiply) or '=' (set)."""
+    out = []
+    for item in items or []:
+        if "*=" in item:
+            key, val, op = *item.split("*=", 1), "*"
+        elif "=" in item:
+            key, val, op = *item.split("=", 1), "="
+        else:
+            raise ValueError(f"--bam {item!r}: expected KEY=VALUE or KEY*=FACTOR")
+        key = key.strip()
+        if key == "vin":
+            raise ValueError("--bam vin: use --vin (the harness records it and the sag model reads it)")
+        out.append((key, op, float(val)))
+    return out
+
+
+def apply_bam_overrides(bam_model, specs):
+    """Mutate a freshly loaded BAM model. Must run before load_mujoco_with_bam: it reads the forcerange
+    (vin*kt/R) and the armature once. Returns {param: (before, after)}."""
+    params = bam_model.get_parameters()
+    changed = {}
+
+    def _set(get, put, name, op, value):
+        before = float(get())
+        after = before * value if op == "*" else value
+        put(after)
+        changed[name] = (before, after)
+
+    for key, op, value in specs:
+        if key == "friction":
+            for name in FRICTION_COEFFS:
+                p = params[name]
+                _set(lambda p=p: p.value, lambda v, p=p: setattr(p, "value", v), name, op, value)
+        elif key in ACTUATOR_KEYS:
+            act = bam_model.actuator
+            _set(lambda: getattr(act, key), lambda v: setattr(act, key, v), key, op, value)
+        elif key in params:
+            p = params[key]
+            _set(lambda: p.value, lambda v: setattr(p, "value", v), key, op, value)
+        else:
+            valid = sorted(["friction", *ACTUATOR_KEYS, *params])
+            raise ValueError(f"--bam {key!r}: unknown key; valid: {', '.join(valid)}")
+    return changed
+
+
+def resolved_bam(bam_model):
+    """Every BAM parameter plus the actuator scalars, as plain floats (recorded in the JSON)."""
+    act = bam_model.actuator
+    out = {name: float(p.value) for name, p in bam_model.get_parameters().items()}
+    out.update(kp=float(act.kp), vin=float(act.vin), max_pwm=float(act.max_pwm), error_gain=float(act.error_gain))
+    return out
+
+
 def build(args):
     kp_fw = args.kp_fw if args.kp_fw is not None else (ip.HD1910_KP_FW if args.hd1910 else ip.BAM_KP_FW)
     if args.hd1910:
@@ -131,12 +194,22 @@ def build(args):
     else:
         bam_model = ip.load_bam_model(kp_fw, args.vin, ip.BAM_MAX_CURRENT)
         xml = REPO / ip.MICRODUCK_XML
+    overrides = apply_bam_overrides(bam_model, parse_bam_overrides(getattr(args, "bam", None)))
+    for name, (before, after) in overrides.items():
+        print(f"bam override: {name} {before:.6g} -> {after:.6g}")
+    backlash = bool(getattr(args, "backlash", False))
+    if backlash and not args.hd1910:
+        raise ValueError("--backlash is only wired for the HD-1910 model")
     model, data, bam_ctrl, names = ip.load_mujoco_with_bam(
-        str(xml), bam_model, 0.005, args.vin_drop_gain if args.vin_drop_gain > 0 else None, ip.BAM_VIN_MIN)
+        str(xml), bam_model, 0.005, args.vin_drop_gain if args.vin_drop_gain > 0 else None, ip.BAM_VIN_MIN,
+        spec=st.hd1910_backlash_spec() if backlash else None, backlash=backlash)
     policy = ip.PolicyInference(model, data, walking_onnx_path=args.walking, bam_ctrl=bam_ctrl, new_cmd_obs=True,
                                 use_projected_gravity=True,  # infer_policy default (--raw-accelerometer off)
                                 joint_vel_lag=getattr(args, "joint_vel_lag", JOINT_VEL_LAG),
-                                default_pose=ip.HD1910_DEFAULT_POSE if args.hd1910 else None)
+                                default_pose=ip.HD1910_DEFAULT_POSE if args.hd1910 else None,
+                                encoder_backlash=backlash)
+    policy.bam_resolved = resolved_bam(bam_model)
+    policy.bam_overrides = {k: list(v) for k, v in overrides.items()}
     pose = None if getattr(args, "script_pose", False) else onnx_default_pose(policy.walking_session, names)
     if pose is None:
         policy.default_pose_source = "script"
@@ -269,7 +342,9 @@ def run(segments, bam_model, model, data, bam_ctrl, policy, pushes=(), delay=Non
                                  ("action", smp["action"]), ("target", smp["target"]), ("tau", smp["tau"]),
                                  ("tau_submax", smp["tau_max"]), ("tau_subsq", smp["tau_sq"]), ("qd_submax", smp["qd_max"])):
                     trace.setdefault(key, []).append(np.asarray(val))
-        vel, tau, sat = np.array(vel), np.array(tau), np.array(sat)
+                if policy.backlash_qpos_indices is not None:  # the play angle the encoder reads through
+                    trace.setdefault("backlash", []).append(data.qpos[policy.backlash_qpos_indices].copy())
+        vel, tau, sat =np.array(vel), np.array(tau), np.array(sat)
         tau_abs, tau_sq, tau_max, qd_max, over, fast = (np.array(b) for b in (tau_abs, tau_sq, tau_max, qd_max, over, fast))
         j = lambda a: dict(zip(names, np.round(a, 4).tolist()))
         out.append(dict(
@@ -518,6 +593,11 @@ def main():
                     help="target delay in physics substeps, resampled every substep (training: 3 6; 0 0 = none)")
     ap.add_argument("--joint-vel-lag", type=int, default=JOINT_VEL_LAG, help="joint_vel obs lag in control steps (training: 1)")
     ap.add_argument("--script-pose", action="store_true", help="ignore the ONNX default_joint_pos, use the script's DEFAULT_POSE")
+    ap.add_argument("--bam", action="append", default=[], metavar="KEY=V|KEY*=F",
+                    help="override the servo model (repeatable): a BAM parameter (kt, R, armature, friction_viscous, "
+                         "...), an actuator scalar (kp, max_pwm, error_gain) or 'friction' (= training's friction_scale)")
+    ap.add_argument("--backlash", action="store_true",
+                    help="HD-1910 backlash body (+-1 deg per joint), encoder read through the backlash as in training")
     ap.add_argument("--json", help="write all metrics here")
     ap.add_argument("--trace", help="write per-control-step time series here (.npz)")
     ap.add_argument("--compare", nargs=2, metavar=("A.json", "B.json"), help="print the gate table of B against A and exit")
@@ -558,7 +638,7 @@ def main():
     if args.json:
         doc = dict(args=vars(args), harness_version=HARNESS_VERSION, default_pose_source=policy.default_pose_source,
                    default_pose=np.round(policy.default_pose, 6).tolist(), actuator_names=policy.actuator_names,
-                   limits=policy.limits, dt=dt,
+                   limits=policy.limits, dt=dt, bam=policy.bam_resolved, bam_overrides=policy.bam_overrides,
                    schedule=results["schedule"][0], push=results["push"][0],
                    steps=results["steps"][0], push_stand=results["push_stand"][0],
                    replicas=results, summary=summary)

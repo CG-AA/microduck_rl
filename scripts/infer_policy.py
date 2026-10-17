@@ -73,7 +73,44 @@ def load_bam_model(kp_fw: float, vin: float, max_current, json_path=None, max_pw
     return bam_model
 
 
-def load_mujoco_with_bam(xml_path: str, bam_model, timestep: float, vin_drop_gain, vin_min, spec=None):
+_BACKLASH_CONTROLLER = None
+
+
+def backlash_encoder_controller_class():
+    """bam.mujoco.MujocoController whose firmware loop reads the encoder THROUGH the backlash hinge.
+
+    This is training's BacklashEncoderBamActuator (actuator/friction_dr_bam.py) on the CPU: the
+    servo's position loop sees servo + passive_<joint>_backlash, while velocity, friction and the
+    external torque stay motor-side. Under the linear duty law error = target - (q + b) ==
+    (target - b) - q, so update() shifts the target by the backlash angle for the parent and puts
+    the original array back afterwards (control_step writes q_target[:] in place, so the array
+    object must survive). Built lazily: bam is imported on first use only.
+    """
+    global _BACKLASH_CONTROLLER
+    if _BACKLASH_CONTROLLER is None:
+        from bam.mujoco import MujocoController
+
+        class BacklashEncoderController(MujocoController):
+            def __init__(self, bam_model, names, model, data, **kw):
+                super().__init__(bam_model, names, model, data, **kw)
+                joints = [model.joint(int(model.actuator(n).trnid[0])).name for n in names]
+                bl = [model.joint(f"passive_{j}_backlash").id for j in joints]
+                self.backlash_qpos_indexes = np.asarray(model.jnt_qposadr[bl])
+
+            def update(self):
+                saved = self.q_target
+                self.q_target = saved - self.mujoco_data.qpos[self.backlash_qpos_indexes]
+                try:
+                    super().update()
+                finally:
+                    self.q_target = saved
+
+        _BACKLASH_CONTROLLER = BacklashEncoderController
+    return _BACKLASH_CONTROLLER
+
+
+def load_mujoco_with_bam(xml_path: str, bam_model, timestep: float, vin_drop_gain, vin_min, spec=None,
+                         backlash=False):
     """Load the scene and hand every non-passive actuator to bam.mujoco.MujocoController.
 
     Mirrors bam.mjlab.BamActuator.edit_spec (what warp does at training time):
@@ -81,7 +118,9 @@ def load_mujoco_with_bam(xml_path: str, bam_model, timestep: float, vin_drop_gai
     joint damping/frictionloss zeroed (BAM rewrites them every step), stiff
     friction constraint. Armature is set on the dofs by MujocoController.
     Pass an already-edited `spec` (e.g. a robot XML given a floor) instead of
-    xml_path. Returns (model, data, bam_ctrl, actuator_names).
+    xml_path. `backlash=True` (a *_backlash model) runs the servo loops on the
+    encoder-through-backlash view, as training does.
+    Returns (model, data, bam_ctrl, actuator_names).
     """
     from bam.mujoco import MujocoController
 
@@ -113,8 +152,8 @@ def load_mujoco_with_bam(xml_path: str, bam_model, timestep: float, vin_drop_gai
     model = spec.compile()
     model.opt.timestep = timestep
     data = mujoco.MjData(model)
-    bam_ctrl = MujocoController(bam_model, names, model, data,
-                                vin_drop_gain=vin_drop_gain, vin_min=vin_min)
+    ctrl_cls = backlash_encoder_controller_class() if backlash else MujocoController
+    bam_ctrl = ctrl_cls(bam_model, names, model, data, vin_drop_gain=vin_drop_gain, vin_min=vin_min)
     print(f"BAM {BAM_MODEL} actuators on {len(names)} joints: kt={kt:.4f} R={R:.4f} "
           f"vin={bam_model.actuator.vin:.2f}V kp_fw={bam_model.actuator.kp:.0f} "
           f"vin_drop_gain={vin_drop_gain} vin_min={vin_min} "
@@ -246,7 +285,7 @@ class PolicyInference:
                  kick_left_onnx_path=None, kick_right_onnx_path=None,
                  roulade_onnx_path=None,
                  kick_duration=3.0, roulade_duration=2.0,
-                 joint_vel_lag=0, default_pose=None):
+                 joint_vel_lag=0, default_pose=None, encoder_backlash=False):
         self.bam_ctrl = bam_ctrl  # bam.mujoco.MujocoController (None = legacy position actuators)
         self.model = model
         self.data = data
@@ -421,6 +460,14 @@ class PolicyInference:
         self.joint_qvel_indices = [
             int(model.jnt_dofadr[model.actuator_trnid[i, 0]]) for i in range(model.nu)
         ]
+        # Encoder-through-backlash view (training's joint_pos_rel_backlash / joint_vel_rel_backlash
+        # on the -Backlash- tasks): the policy sees servo + passive_<joint>_backlash. None otherwise.
+        self.backlash_qpos_indices = self.backlash_qvel_indices = None
+        if encoder_backlash:
+            bl = [model.joint(f"passive_{model.joint(int(model.actuator_trnid[i, 0])).name}_backlash").id
+                  for i in range(model.nu)]
+            self.backlash_qpos_indices = [int(model.jnt_qposadr[j]) for j in bl]
+            self.backlash_qvel_indices = [int(model.jnt_dofadr[j]) for j in bl]
 
         # Default pose for the policy (flexed legs): the action offset and the
         # joint_pos obs reference. Callers that know the policy's own default
@@ -683,13 +730,17 @@ class PolicyInference:
         return self.data.sensordata[sensor_adr:sensor_adr + 3].copy().astype(np.float32)
 
     def get_joint_pos_relative(self):
-        """Get joint positions relative to default pose."""
+        """Joint positions relative to the default pose (plus the backlash hinge on the encoder view)."""
         current_pos = self.data.qpos[self.joint_qpos_indices].copy().astype(np.float32)
+        if self.backlash_qpos_indices is not None:
+            current_pos += self.data.qpos[self.backlash_qpos_indices].astype(np.float32)
         return current_pos - self.default_pose
 
     def get_joint_vel(self):
         """Get joint velocities, joint_vel_lag control steps old (refreshed once per sim time)."""
         cur = self.data.qvel[self.joint_qvel_indices].copy().astype(np.float32)
+        if self.backlash_qvel_indices is not None:
+            cur += self.data.qvel[self.backlash_qvel_indices].astype(np.float32)
         if self.joint_vel_lag <= 0:
             return cur
         if self._jv_time != self.data.time:

@@ -96,11 +96,18 @@ def build(hd1910=True, kp_scale=8.0, vin=7.4, vin_drop_gain=None, backlash=False
     if backlash:
         if not hd1910:
             raise ValueError("--backlash is only wired for the HD-1910 model")
-        spec = mujoco.MjSpec.from_file(str(BACKLASH_XML))  # robot only: give it the scene's floor
-        floor = spec.worldbody.add_geom()
-        floor.name, floor.type, floor.size = "floor", mujoco.mjtGeom.mjGEOM_PLANE, [0.0, 0.0, 0.05]
+        spec = hd1910_backlash_spec()
     model, data, ctrl, names = ip.load_mujoco_with_bam(str(xml), bam, TIMESTEP, vin_drop_gain, ip.BAM_VIN_MIN, spec=spec)
     return bam, model, data, ctrl, names
+
+
+def hd1910_backlash_spec():
+    """The HD-1910 backlash robot (a passive_<joint>_backlash hinge of +-1 deg behind every servo) as an
+    MjSpec with the scene's floor added: the robot XML has no world, and no scene XML wraps it."""
+    spec = mujoco.MjSpec.from_file(str(BACKLASH_XML))
+    floor = spec.worldbody.add_geom()
+    floor.name, floor.type, floor.size = "floor", mujoco.mjtGeom.mjGEOM_PLANE, [0.0, 0.0, 0.05]
+    return spec
 
 
 def sole_points(model, data, geom_name):
