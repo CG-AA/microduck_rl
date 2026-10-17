@@ -23,14 +23,23 @@ _spec = importlib.util.spec_from_file_location("eval_walk", REPO / "scripts" / "
 ev = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ev)
 
-# (label, seconds, vx, vy, wz): the speeds this policy actually walks at (see NOTES.md section 9)
-SCRIPT = [
-    ("stand", 1.5, 0.0, 0.0, 0.0),
-    ("forward 0.3 m/s", 7.0, 0.3, 0.0, 0.0),
-    ("turn -1.0 rad/s", 4.0, 0.0, 0.0, -1.0),
-    ("forward 0.3 m/s", 4.0, 0.3, 0.0, 0.0),
-    ("stand", 2.0, 0.0, 0.0, 0.0),
-]
+# (label, seconds, vx, vy, wz)
+SCRIPTS = {
+    "walk": [  # the speeds every policy so far walks at
+        ("stand", 1.5, 0.0, 0.0, 0.0),
+        ("forward 0.3 m/s", 7.0, 0.3, 0.0, 0.0),
+        ("turn -1.0 rad/s", 4.0, 0.0, 0.0, -1.0),
+        ("forward 0.3 m/s", 4.0, 0.3, 0.0, 0.0),
+        ("stand", 2.0, 0.0, 0.0, 0.0),
+    ],
+    "slow": [  # the slow-command dead zone: does it start walking at 0.1 m/s from a stand?
+        ("stand", 1.5, 0.0, 0.0, 0.0),
+        ("forward 0.1 m/s", 6.0, 0.1, 0.0, 0.0),
+        ("stand", 2.0, 0.0, 0.0, 0.0),
+        ("backward 0.1 m/s", 4.0, -0.1, 0.0, 0.0),
+        ("stand", 1.5, 0.0, 0.0, 0.0),
+    ],
+}
 
 
 def main():
@@ -44,7 +53,9 @@ def main():
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--size", type=int, nargs=2, default=(960, 540))
     ap.add_argument("--title", default=None)
+    ap.add_argument("--script", choices=sorted(SCRIPTS), default="walk", help="command script (default: walk)")
     args = ap.parse_args()
+    SCRIPT = SCRIPTS[args.script]
 
     bam_model, model, data, bam_ctrl, policy = ev.build(args)
     ev.reset(model, data, bam_ctrl, policy)
