@@ -71,6 +71,7 @@ COLUMNS = [
     ("back .10", "back 0.10 vx [m/s]"),
     ("left .10", "left 0.10 vy [m/s]"),
     ("turn", "turn |wz| mean [rad/s]"),
+    ("turn rest", "turn from rest |wz| min @1.0 [rad/s]"),
     ("falls", "falls (sched/steps/stand/kick<=0.3)"),
     ("0.4 kick", "falls at the 0.4 kick (report)"),
     ("stand max", "stand torque max joint [N.m]"),

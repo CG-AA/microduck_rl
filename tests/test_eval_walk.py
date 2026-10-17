@@ -291,3 +291,18 @@ def test_sensitivity_table_and_verdicts(tmp_path):
     assert "0.010 ✗" in line["kp_x0.5"] and "fwd 0.10 vx" in line["kp_x0.5"]
     assert "missing" in line["absent"]
     assert "**fails** (2): kp_x0.7, kp_x0.5" in text
+
+
+def test_turn_from_rest_rows(ev):
+    """Harness v3: the turn-from-standstill rows read the turn_rest rollout, gate at 0.5 / 0.25 rad/s on the
+    weaker direction, and read n/a on older JSONs (which never measured it)."""
+    seg = lambda name, wz: dict(segment=name, cmd=[0, 0, 0], fell_at=None, mean=[0.0, 0.0, wz])
+    turn_rest = [seg("stand", 0.0), seg("turn +1.0", 0.9), seg("stand", 0.0), seg("turn -1.0", -0.4),
+                 seg("stand", 0.0), seg("turn +0.5", 0.3), seg("stand", 0.0), seg("turn -0.5", -0.45)]
+    doc = dict(args={"continuous": 0.29}, summary=dict(schedule=[], steps=[], push=[], push_stand=[], turn_rest=turn_rest))
+    by = {name: (y, v) for name, _, y, v in ev.gate_rows(doc, doc)}
+    assert by["turn from rest |wz| min @1.0 [rad/s]"] == (pytest.approx(0.4), "FAIL")
+    assert by["turn from rest |wz| min @0.5 [rad/s]"] == (pytest.approx(0.3), "pass")
+    old = dict(args={"continuous": 0.29}, summary=dict(schedule=[], steps=[], push=[], push_stand=[]))
+    assert {name: v for name, _, _, v in ev.gate_rows(old, old)}["turn from rest |wz| min @1.0 [rad/s]"] == "n/a"
+    assert [k for k, _, _ in ev.ROLLOUTS][-1] == "turn_rest"  # appended: earlier rollouts keep their seeds

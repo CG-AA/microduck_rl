@@ -2,7 +2,7 @@
 """Headless walking evaluation on CPU MuJoCo with the BAM actuators (no viewer, no keyboard).
 
 Runs an exported walking ONNX (61-D obs, --new-cmd-obs layout) through a fixed command schedule,
-a step-response schedule and two push tests, using scripts/infer_policy.py's own model loading,
+a step-response schedule, two push tests and turns in place from a standstill (v3), using scripts/infer_policy.py's own model loading,
 observation and action code so it is the same rehearsal, scripted. Harness v2 reproduces what
 training puts around the policy:
 
@@ -55,7 +55,7 @@ def _load(name):
 ip = _load("infer_policy")
 st = _load("stand_torque")  # contact_height: spawn the robot on its soles whatever its default pose
 
-HARNESS_VERSION = 2
+HARNESS_VERSION = 3  # v3 (2026-10-17): + turn_rest (turn in place from a standstill)
 DECIMATION = 4  # 50 Hz control on a 5 ms physics step, as in training
 SETTLE = 0.4  # fraction of each segment ignored before measuring
 MA_SECONDS = 0.3  # step responses: causal moving average, longer than a stride, shorter than a segment
@@ -93,6 +93,19 @@ STEPS = [
     ("left 0.10", 5.0, 0.0, 0.10, 0.0),
     ("stand", 3.0, 0.0, 0.0, 0.0),
 ]
+# Turn in place starting from a standstill, at full and half rate. The schedule only ever asks for a
+# turn right after a sideways walk, i.e. with the gait already running; v2b@5500 passed it while
+# answering every turn-from-rest command by standing still (2026-10-17).
+TURN_REST = [
+    ("stand", 2.0, 0.0, 0.0, 0.0),
+    ("turn +1.0", 5.0, 0.0, 0.0, 1.0),
+    ("stand", 2.0, 0.0, 0.0, 0.0),
+    ("turn -1.0", 5.0, 0.0, 0.0, -1.0),
+    ("stand", 2.0, 0.0, 0.0, 0.0),
+    ("turn +0.5", 5.0, 0.0, 0.0, 0.5),
+    ("stand", 2.0, 0.0, 0.0, 0.0),
+    ("turn -0.5", 5.0, 0.0, 0.0, -0.5),
+]
 PUSHES = (0.2, 0.3, 0.4)  # m/s lateral velocity kicks, one per 3 s
 PUSH_SECONDS = 3.0 * (len(PUSHES) + 1)
 ROLLOUTS = (  # key, segments, pushes
@@ -100,6 +113,7 @@ ROLLOUTS = (  # key, segments, pushes
     ("steps", STEPS, ()),
     ("push", [("push walk", PUSH_SECONDS, 0.10, 0.0, 0.0)], PUSHES),
     ("push_stand", [("push stand", PUSH_SECONDS, 0.0, 0.0, 0.0)], PUSHES),
+    ("turn_rest", TURN_REST, ()),  # last: the earlier rollouts keep their delay seeds (index-based)
 )
 
 
@@ -503,7 +517,7 @@ def _worst(doc, key, fallback):
 def _falls(doc):
     """(falls at the schedule/steps/push_stand rollouts or the 0.2/0.3 kicks, falls at the 0.4 kick)"""
     hard, soft = 0, 0
-    for key in ("schedule", "steps", "push_stand"):
+    for key in ("schedule", "steps", "push_stand", "turn_rest"):
         hard += sum(1 for r in (_rows(doc, key) or []) if r.get("fell_at") is not None)
     for r in (_rows(doc, "push") or []):
         if r.get("fell_at") is not None:
@@ -519,6 +533,13 @@ def _step(doc, name, field):
         if s["step"] == name:
             return s.get(field)
     return None
+
+
+def _turn_rest(doc, rate):
+    """min |yaw rate| over the +rate and -rate turn-from-standstill segments (None before harness v3)."""
+    rows = _rows(doc, "turn_rest")
+    vals = [_seg(rows, f"turn {sign}{rate:.1f}") for sign in "+-"]
+    return None if any(v is None for v in vals) else min(abs(v["mean"][2]) for v in vals)
 
 
 def gate_rows(a, b):
@@ -538,6 +559,8 @@ def gate_rows(a, b):
         ("fwd 0.30 vx [m/s]", lambda d: g(d, "schedule", "fwd 0.30", 0), lambda x, y: x is not None and y >= x - 0.03),
         ("turn |wz| mean [rad/s]", lambda d: (lambda v: float(np.mean(v)) if v else None)(turn(d)), lambda x, y: y >= 0.5 and (x is None or y >= x - 0.25)),
         ("turn |wz| min [rad/s]", lambda d: (lambda v: float(min(v)) if v else None)(turn(d)), lambda x, y: y >= 0.3 and (x is None or y >= x - 0.25)),
+        ("turn from rest |wz| min @1.0 [rad/s]", lambda d: _turn_rest(d, 1.0), lambda x, y: y >= 0.5),
+        ("turn from rest |wz| min @0.5 [rad/s]", lambda d: _turn_rest(d, 0.5), lambda x, y: y >= 0.25),
         ("stand drift |v_xy| [m/s]", drift, lambda x, y: y <= 0.01),
         ("stand drift |wz| [rad/s]", lambda d: (lambda v: None if v is None else abs(v))(g(d, "schedule", "stand", 2)), lambda x, y: y <= 0.02),
         ("falls (sched/steps/stand/kick<=0.3)", lambda d: _falls(d)[0], lambda x, y: y == 0),
@@ -632,6 +655,7 @@ def main():
     report_steps(summary["steps_metrics"])
     report(f"push test: lateral kicks {PUSHES} m/s every 3 s at 0.1 m/s", summary["push"], args.continuous)
     report(f"push test: lateral kicks {PUSHES} m/s every 3 s standing", summary["push_stand"], args.continuous)
+    report("turn in place from a standstill", summary["turn_rest"], args.continuous)
     falls = [(key, k, r["fell_at"]) for key, reps in results.items() if key != "steps_metrics"
              for k, rep in enumerate(reps) for r in rep if r["fell_at"] is not None]
     print(f"\nfalls: {falls if falls else 'none'}   default pose: {policy.default_pose_source}")
@@ -640,7 +664,7 @@ def main():
                    default_pose=np.round(policy.default_pose, 6).tolist(), actuator_names=policy.actuator_names,
                    limits=policy.limits, dt=dt, bam=policy.bam_resolved, bam_overrides=policy.bam_overrides,
                    schedule=results["schedule"][0], push=results["push"][0],
-                   steps=results["steps"][0], push_stand=results["push_stand"][0],
+                   steps=results["steps"][0], push_stand=results["push_stand"][0], turn_rest=results["turn_rest"][0],
                    replicas=results, summary=summary)
         Path(args.json).write_text(json.dumps(doc, indent=1))
         print("wrote", args.json)
