@@ -1,0 +1,19 @@
+{
+  "_note": "Servo settings that match what the HD-1910 simulation assumes: position mode, no deadband, no firmware acceleration profile, full duty (max_torque 980 = max_pwm 0.98), P gain set from the gain map, no D or I (the sim's servo law is pure proportional duty; the bench D-term check decides whether D=0 is right). goal_speed (46) and goal_current (44) are NOT written: their meaning in HLS position mode (speed cap? torque cap? 0 = unlimited or zero?) is unconfirmed; the configure script prints them so the first session can record what the factory left there.",
+  "eeprom": {
+    "mode": 0,
+    "cw_dead": 0,
+    "ccw_dead": 0,
+    "max_torque": 980,
+    "min_angle": 0,
+    "max_angle": 4095
+  },
+  "ram": {
+    "acceleration": 0,
+    "torque_limit": 980,
+    "p_gain": null,
+    "d_gain": 0,
+    "i_gain": 0
+  },
+  "inspect": ["goal_speed", "goal_current", "protection_current", "overcurrent_time", "max_temperature", "min_voltage", "offset", "p_gain_eeprom", "d_gain_eeprom", "i_gain_eeprom"]
+}
