@@ -213,29 +213,69 @@ def test_track_linear_velocity_fine_prices_small_errors_through_an_ema():
     assert r[0] == pytest.approx(math.exp(-1.0), abs=0.02)
 
 
-def test_hd1910_v2c_levers_and_servo_dr():
-    """v2c: the forward-only bucket is off, standing torque is priced 10x, and the servo DR is wide and
-    per-env on both HD-1910 tasks, while the XL330 task keeps the stock (0.9, 1.1) ranges and no gain DR."""
+def test_hd1910_v2c_levers_and_servo_dr_are_staged():
+    """v2c: the HD-1910 tasks start exactly as v2b (stock servo DR, no gain DR, forward bucket 0.2,
+    stand_torque -2) and curricula bring in the wide servo DR (600 / 1200), drop the forward-only
+    bucket (1200) and raise stand_torque to -20 (2500). The XL330 task gets none of it."""
     from mjlab.tasks.registry import load_env_cfg
     from mjlab_microduck.tasks import hd1910
     from mjlab_microduck.tasks import mdp as microduck_mdp
 
-    assert hd1910.STAND_TORQUE_WEIGHT == -20.0 and hd1910.FORWARD_ENVS == 0.0
+    it = lambda n: n * hd1910.NUM_STEPS_PER_ENV
     for task in ("Mjlab-Velocity-Flat-MicroDuck-HD1910", "Mjlab-Velocity-Flat-Backlash-MicroDuck-HD1910"):
         cfg = load_env_cfg(task)
-        assert cfg.commands["twist"].rel_forward_envs == 0.0
-        assert cfg.rewards["stand_torque"].weight == -20.0
-        assert tuple(cfg.events["randomize_joint_friction"].params["scale_range"]) == hd1910.FRICTION_SCALE_RANGE == (0.5, 1.5)
-        assert tuple(cfg.events["randomize_armature"].params["ranges"]) == hd1910.ARMATURE_SCALE_RANGE == (0.5, 1.5)
+        # stage 0 = v2b
+        assert cfg.commands["twist"].rel_forward_envs == pytest.approx(0.2)
+        assert cfg.rewards["stand_torque"].weight == -2.0
+        assert tuple(cfg.events["randomize_joint_friction"].params["scale_range"]) == (0.9, 1.1)
+        assert tuple(cfg.events["randomize_armature"].params["ranges"]) == (0.9, 1.1)
         gains = cfg.events["randomize_motor_gains"]
         assert gains.func is microduck_mdp.randomize_bam_gain_scale and gains.mode == "reset"
-        assert tuple(gains.params["kp_range"]) == hd1910.KP_SCALE_RANGE == (0.7, 1.4)
-        assert tuple(gains.params["kd_range"]) == (1.0, 1.0)
+        assert tuple(gains.params["kp_range"]) == (1.0, 1.0) and tuple(gains.params["kd_range"]) == (1.0, 1.0)
+        # the stages
+        cur = cfg.curriculum
+        fr = cur["randomize_joint_friction_stages"].params["stages"]
+        assert [s["step"] for s in fr] == [0, it(600), it(1200)]
+        assert fr[-1]["params"] == {"scale_range": hd1910.FRICTION_SCALE_RANGE} == {"scale_range": (0.5, 1.5)}
+        assert cur["randomize_armature_stages"].params["stages"][-1]["params"] == {"ranges": (0.5, 1.5)}
+        kp = cur["randomize_motor_gains_stages"].params["stages"]
+        assert kp[0]["params"] == {"kp_range": (1.0, 1.0)} and kp[-1]["params"] == {"kp_range": (0.7, 1.4)}
+        fw = cur["forward_envs_stages"].params
+        assert fw["attr"] == "rel_forward_envs" and fw["stages"] == [{"step": 0, "value": 0.2}, {"step": it(1200), "value": 0.0}]
+        st = cur["stand_torque_weight"].params
+        assert st["reward_name"] == "stand_torque"
+        assert st["weight_stages"] == [{"step": 0, "weight": -2.0}, {"step": it(2500), "weight": -20.0}]
+        for name in ("randomize_joint_friction_stages", "randomize_armature_stages", "randomize_motor_gains_stages"):
+            assert cur[name].func is microduck_mdp.event_params_curriculum
+            assert cur[name].params["stages"][0]["params"] == {  # stage 0 equals the event's own params
+                k: tuple(v) for k, v in cfg.events[cur[name].params["event_name"]].params.items() if k in cur[name].params["stages"][0]["params"]}
     xl = load_env_cfg("Mjlab-Velocity-Flat-MicroDuck")
     assert xl.commands["twist"].rel_forward_envs == pytest.approx(0.2)
     assert tuple(xl.events["randomize_joint_friction"].params["scale_range"]) == (0.9, 1.1)
-    assert tuple(xl.events["randomize_armature"].params["ranges"]) == (0.9, 1.1)
     assert "randomize_motor_gains" not in xl.events
+    assert not {"forward_envs_stages", "stand_torque_weight", "randomize_joint_friction_stages"} & set(xl.curriculum)
+
+
+def test_staged_curricula_mutate_the_live_terms():
+    import types
+    import torch
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    ev_cfg = types.SimpleNamespace(params={"scale_range": (0.9, 1.1), "asset_cfg": "robot"})
+    cmd_cfg = types.SimpleNamespace(rel_forward_envs=0.2)
+    env = types.SimpleNamespace(
+        common_step_counter=0,
+        event_manager=types.SimpleNamespace(get_term_cfg=lambda name: ev_cfg),
+        command_manager=types.SimpleNamespace(get_term=lambda name: types.SimpleNamespace(cfg=cmd_cfg)))
+    stages = [{"step": 0, "params": {"scale_range": (0.9, 1.1)}}, {"step": 100, "params": {"scale_range": (0.7, 1.3)}},
+              {"step": 200, "params": {"scale_range": (0.5, 1.5)}}]
+    fw = [{"step": 0, "value": 0.2}, {"step": 200, "value": 0.0}]
+    for step, want_range, want_fw, want_idx in ((0, (0.9, 1.1), 0.2, 0), (150, (0.7, 1.3), 0.2, 1), (201, (0.5, 1.5), 0.0, 2)):
+        env.common_step_counter = step
+        idx = microduck_mdp.event_params_curriculum(env, None, "randomize_joint_friction", stages)
+        val = microduck_mdp.command_attr_curriculum(env, None, "twist", "rel_forward_envs", fw)
+        assert ev_cfg.params["scale_range"] == want_range and ev_cfg.params["asset_cfg"] == "robot"
+        assert cmd_cfg.rel_forward_envs == want_fw and float(val) == pytest.approx(want_fw) and int(idx) == want_idx
 
 
 def test_randomize_bam_gain_scale_spans_its_range():

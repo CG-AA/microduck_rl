@@ -3632,6 +3632,46 @@ def reward_weight(
     return torch.tensor([term_cfg.weight])
 
 
+def event_params_curriculum(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    event_name: str,
+    stages: list[dict],
+) -> torch.Tensor:
+    """Step-staged event parameters: ``stages`` = ``[{"step": int, "params": {name: value}}]``.
+
+    Every stage whose step has elapsed is applied in order (later ones override), on the live
+    EventManager term cfg (env.cfg.events is a deepcopy: writing it is a no-op). The term's own
+    params are what applies before the first stage, so make them equal to stage 0. Returns the
+    index of the current stage, for logging.
+    """
+    del env_ids
+    cfg = env.event_manager.get_term_cfg(event_name)
+    current = -1
+    for i, stage in enumerate(stages):
+        if env.common_step_counter > stage["step"]:
+            cfg.params.update(stage["params"])
+            current = i
+    return torch.tensor([float(max(current, 0))])
+
+
+def command_attr_curriculum(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    command_name: str,
+    attr: str,
+    stages: list[dict],
+) -> torch.Tensor:
+    """Step-staged attribute of a live command term cfg: ``stages`` = ``[{"step": int, "value": v}]``
+    (e.g. ``rel_forward_envs``). Same semantics as ``standing_envs_curriculum``."""
+    del env_ids
+    cfg = env.command_manager.get_term(command_name).cfg
+    for stage in stages:
+        if env.common_step_counter > stage["step"]:
+            setattr(cfg, attr, stage["value"])
+    return torch.tensor([float(getattr(cfg, attr))])
+
+
 def com_range_curriculum(
     env: ManagerBasedRlEnv,
     env_ids: torch.Tensor,

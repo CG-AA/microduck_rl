@@ -25,7 +25,7 @@ from dataclasses import replace
 
 from mjlab.entity import EntityCfg
 from mjlab.envs import ManagerBasedRlEnvCfg
-from mjlab.managers import EventTermCfg, RewardTermCfg
+from mjlab.managers import CurriculumTermCfg, EventTermCfg, RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 from mjlab_microduck.robot.hd1910_pose import HD1910_SPAWN_Z
@@ -54,14 +54,16 @@ SLOW_ENVS = 0.15            # share of envs that creep (0.05-0.15 m/s, one axis)
 # ~0.05, so this weight makes it cost ~0.1/step against ~4/step of standing
 # reward: enough to drop a habit that buys nothing, not enough to forbid torque
 # where a push needs it. Gated on zero command, so the gait is untaxed.
-# v2c (2026-10-17) raises it tenfold: at -2.0 the term logged -0.03 to -0.05, ~1 %
+STAND_TORQUE_WEIGHT = -2.0
+# v2c raises it tenfold (staged, see below): at -2.0 it logged -0.03 to -0.05, ~1 %
 # of the standing reward, and bracing survived in two of v2b's three checkpoints.
-STAND_TORQUE_WEIGHT = -20.0
+STAND_TORQUE_WEIGHT_FINAL = -20.0
 # -- v2c: the inherited mjlab rel_forward_envs = 0.2 clamps a fifth of the commands
 # to vx >= 0.3 m/s. It shifted the vx normalizer mean to +0.04, which put +0.10 m/s
 # nearest the standing cluster and made forward the last slow axis to come back.
 # Uniform sampling still gives 0.3-0.4 m/s to 12.5 % of envs.
-FORWARD_ENVS = 0.0
+FORWARD_ENVS = 0.2  # mjlab's value, kept while the gait is discovered
+FORWARD_ENVS_FINAL = 0.0
 # -- v2c: servo DR for a servo that has not been measured. Friction and rotor
 # inertia are borrowed from the XL330, and the P-register -> duty/rad mapping is
 # unknown (and coarse: P ~ 3 if it scales like the STS3215). The sensitivity
@@ -72,6 +74,22 @@ FORWARD_ENVS = 0.0
 FRICTION_SCALE_RANGE = (0.5, 1.5)
 ARMATURE_SCALE_RANGE = (0.5, 1.5)
 KP_SCALE_RANGE = (0.7, 1.4)
+# -- v2c staging (2026-10-17). With all three changes active from step 0, seed 42
+# had not found a gait by iteration 1000 (0.20 m/s -> 0.06, no turning; v2b walked
+# and turned by then). Per AGENTS.md (introduce taxes after the skill exists;
+# phase-align stages), the run now trains exactly as v2b until the gait exists,
+# then widens the servo DR in two steps and drops the forward-only bucket, and
+# prices standing torque at full weight only after the standing curriculum
+# (25 % at 2000) has settled. Stages sit between the base recipe's boundaries
+# (500/750/1000/1250/1500/2000). Iterations (x NUM_STEPS_PER_ENV in the cfg).
+SERVO_DR_STAGES = [
+    (0, dict(friction=(0.9, 1.1), armature=(0.9, 1.1), kp=(1.0, 1.0))),  # = v2b
+    (600, dict(friction=(0.7, 1.3), armature=(0.7, 1.3), kp=(0.85, 1.2))),
+    (1200, dict(friction=FRICTION_SCALE_RANGE, armature=ARMATURE_SCALE_RANGE, kp=KP_SCALE_RANGE)),
+]
+FORWARD_ENVS_STAGES = [(0, FORWARD_ENVS), (1200, FORWARD_ENVS_FINAL)]
+STAND_TORQUE_STAGES = [(0, STAND_TORQUE_WEIGHT), (2500, STAND_TORQUE_WEIGHT_FINAL)]
+NUM_STEPS_PER_ENV = 24  # curriculum steps are env steps: iteration x 24
 
 
 def apply_hd1910_recipe(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
@@ -98,17 +116,37 @@ def apply_hd1910_recipe(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
         weight=STAND_TORQUE_WEIGHT,
         params={"command_name": "twist"},
     )
-    # Servo DR (v2c): widen the two borrowed parameters, add a per-env gain factor.
+    # Servo DR (v2c): the events start at stage 0 (= v2b) and the curricula widen them.
+    dr0 = SERVO_DR_STAGES[0][1]
     friction = deepcopy(cfg.events["randomize_joint_friction"])
-    friction.params["scale_range"] = FRICTION_SCALE_RANGE
+    friction.params["scale_range"] = dr0["friction"]
     cfg.events["randomize_joint_friction"] = friction
     armature = deepcopy(cfg.events["randomize_armature"])
-    armature.params["ranges"] = ARMATURE_SCALE_RANGE
+    armature.params["ranges"] = dr0["armature"]
     cfg.events["randomize_armature"] = armature
     cfg.events["randomize_motor_gains"] = EventTermCfg(
         func=microduck_mdp.randomize_bam_gain_scale,
         mode="reset",
-        params={"asset_cfg": SceneEntityCfg("robot"), "kp_range": KP_SCALE_RANGE, "kd_range": (1.0, 1.0)},
+        params={"asset_cfg": SceneEntityCfg("robot"), "kp_range": dr0["kp"], "kd_range": (1.0, 1.0)},
+    )
+    steps = lambda it: it * NUM_STEPS_PER_ENV
+    for event, key, param in (("randomize_joint_friction", "friction", "scale_range"),
+                              ("randomize_armature", "armature", "ranges"),
+                              ("randomize_motor_gains", "kp", "kp_range")):
+        cfg.curriculum[f"{event}_stages"] = CurriculumTermCfg(
+            func=microduck_mdp.event_params_curriculum,
+            params={"event_name": event,
+                    "stages": [{"step": steps(it), "params": {param: d[key]}} for it, d in SERVO_DR_STAGES]},
+        )
+    cfg.curriculum["forward_envs_stages"] = CurriculumTermCfg(
+        func=microduck_mdp.command_attr_curriculum,
+        params={"command_name": "twist", "attr": "rel_forward_envs",
+                "stages": [{"step": steps(it), "value": v} for it, v in FORWARD_ENVS_STAGES]},
+    )
+    cfg.curriculum["stand_torque_weight"] = CurriculumTermCfg(
+        func=microduck_mdp.reward_weight,
+        params={"reward_name": "stand_torque",
+                "weight_stages": [{"step": steps(it), "weight": w} for it, w in STAND_TORQUE_STAGES]},
     )
     return cfg
 
