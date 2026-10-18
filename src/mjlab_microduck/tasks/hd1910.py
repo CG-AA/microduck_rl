@@ -80,8 +80,11 @@ KP_SCALE_RANGE = (0.7, 1.4)
 # phase-align stages), the run now trains exactly as v2b until the gait exists,
 # then widens the servo DR in two steps and drops the forward-only bucket, and
 # prices standing torque at full weight only after the standing curriculum
-# (25 % at 2000) has settled. Stages sit between the base recipe's boundaries
-# (500/750/1000/1250/1500/2000). Iterations (x NUM_STEPS_PER_ENV in the cfg).
+# (25 % at 2000) has settled. Stages sit between the action_rate / standing
+# boundaries (500/750/1000/1250/1500/2000), but 600 coincides with the base
+# head_pose_bias_weight 0 -> 1.0 (microduck_velocity_env_cfg), so a metric step at
+# 600 cannot be pinned on the DR widening alone (v2c-staged and v2d alike).
+# Iterations (x NUM_STEPS_PER_ENV in the cfg).
 SERVO_DR_STAGES = [
     (0, dict(friction=(0.9, 1.1), armature=(0.9, 1.1), kp=(1.0, 1.0))),  # = v2b
     (600, dict(friction=(0.7, 1.3), armature=(0.7, 1.3), kp=(0.85, 1.2))),
