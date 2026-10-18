@@ -39,6 +39,13 @@ SCRIPTS = {
         ("backward 0.1 m/s", 4.0, -0.1, 0.0, 0.0),
         ("stand", 1.5, 0.0, 0.0, 0.0),
     ],
+    "turn": [  # turning in place from a standstill (harness v3's turn_rest), full and half rate
+        ("stand", 1.5, 0.0, 0.0, 0.0),
+        ("turn +1.0 rad/s from rest", 4.0, 0.0, 0.0, 1.0),
+        ("stand", 1.5, 0.0, 0.0, 0.0),
+        ("turn -0.5 rad/s from rest", 4.0, 0.0, 0.0, -0.5),
+        ("stand", 1.5, 0.0, 0.0, 0.0),
+    ],
 }
 
 
