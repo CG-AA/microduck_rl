@@ -338,3 +338,10 @@ def test_the_servos_field_follows_the_training_task():
     m.validate_manifest(built)
     with pytest.raises(m.ManifestError, match="servos"):
         m.build_manifest(name="walk", kind="perpetual", description="d", servos="sts3215")
+
+
+def test_provenance_names_the_fork_from_the_git_remote():
+    assert m.github_repo("https://github.com/CG-AA/microduck_rl.git") == "CG-AA/microduck_rl"
+    assert m.github_repo("git@github.com:pollen-robotics/microduck_rl.git") == "pollen-robotics/microduck_rl"
+    assert m.github_repo("https://github.com/a/b") == "a/b"
+    assert m.github_repo("https://gitlab.com/a/b.git") is None and m.github_repo(None) is None

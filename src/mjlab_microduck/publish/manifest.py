@@ -99,7 +99,19 @@ def git_provenance(repo_root: Path | None = None) -> dict[str, Any]:
         return {}
     branch = git("rev-parse", "--abbrev-ref", "HEAD")
     status = git("status", "--porcelain", "--untracked-files=no")
-    return {"commit": commit, "branch": branch, "dirty": bool(status)}
+    out = {"commit": commit, "branch": branch, "dirty": bool(status)}
+    repo = github_repo(git("remote", "get-url", "origin"))
+    if repo:
+        out["repo"] = repo  # the fork the weights were trained from, not always pollen-robotics
+    return out
+
+
+def github_repo(url: str | None) -> str | None:
+    """`owner/name` from a GitHub remote URL (https or ssh form), else None."""
+    import re
+
+    m = re.match(r"^(?:https://github\.com/|git@github\.com:)([^/]+)/([^/]+?)(?:\.git)?/?$", (url or "").strip())
+    return f"{m.group(1)}/{m.group(2)}" if m else None
 
 
 def build_manifest(
