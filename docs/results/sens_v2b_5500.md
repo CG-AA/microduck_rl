@@ -1,0 +1,32 @@
+| condition | fwd .10 | fwd .20 | fwd .30 | back .10 | left .10 | turn | falls | 0.4 kick | stand max | stand legs | peak | Δfwd vs nominal | verdict | falls in | failing gate rows |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| nominal | 0.095 | 0.197 | 0.307 | -0.104 | 0.101 | 0.978 | 0 | 0 | 0.072 | 0.317 | 0.684 ⚠ | +0.000 / +0.000 / +0.000 | robust | - | - |
+| vin6.5 | 0.090 | 0.177 | 0.276 | -0.087 | 0.093 | 0.918 | 0 | 0 | 0.068 | 0.311 | 0.537 | -0.005 / -0.020 / -0.031 | degraded | - | - |
+| vin8.2 | 0.102 | 0.211 | 0.327 | -0.116 | 0.123 | 1.044 | 0 | 1 | 0.074 | 0.321 ✗ | 0.571 | +0.007 / +0.014 / +0.020 | robust | - | stand torque leg sum |
+| vin6.5_sag0.2 | 0.089 | 0.175 | 0.270 | -0.083 | 0.093 | 0.899 | 0 | 1 | 0.069 | 0.312 | 0.529 | -0.006 / -0.022 / -0.037 | degraded | - | - |
+| friction_x0.5 | 0.101 | 0.210 | 0.328 | -0.112 | 0.115 | 1.039 | 0 | 1 | 0.057 | 0.270 | 0.507 | +0.006 / +0.013 / +0.021 | robust | - | - |
+| friction_x1.5 | 0.088 | 0.176 | 0.275 | -0.091 | 0.091 | 0.880 | 0 | 1 | 0.084 ✗ | 0.394 ✗ | 0.696 ⚠ | -0.007 / -0.021 / -0.032 | degraded | - | stand torque max joint, stand torque leg sum |
+| friction_x2 | 0.056 ✗ | 0.131 | 0.216 | -0.033 ✗ | 0.034 ✗ | 0.591 ✗ | 1 ✗ | 0 | 0.082 ✗ | 0.383 ✗ | 1.281 ✗ | -0.039 / -0.065 / -0.091 | fails | steps x1 | fwd 0.10 vx, back 0.10 vx, left 0.10 vy, step 0->0.10 |ss_err|, turn |wz| mean, turn |wz| min, falls, stand torque max joint, stand torque leg sum, settled RMS worst, substep peak worst |
+| armature_x0.5 | 0.098 | 0.203 | 0.318 | -0.100 | 0.115 | 0.983 | 0 | 0 | 0.070 | 0.312 | 0.637 ⚠ | +0.003 / +0.007 / +0.011 | degraded | - | turn |wz| min |
+| armature_x1.5 | 0.094 | 0.191 | 0.292 | -0.105 | 0.103 | 0.944 | 1 ✗ | 0 | 0.072 | 0.319 ✗ | 0.623 ⚠ | -0.001 / -0.006 / -0.015 | fails | push x1 | falls, stand torque leg sum |
+| armature_x2 | 0.093 | 0.184 | 0.280 | -0.103 | 0.105 | 0.938 | 0 | 0 | 0.072 | 0.323 ✗ | 0.679 ⚠ | -0.002 / -0.013 / -0.027 | robust | - | stand torque leg sum |
+| kp_x0.5 | 0.045 ✗ | 0.082 | 0.145 | -0.009 ✗ | 0.017 ✗ | 0.287 ✗ | 1 ✗ | 0 | 0.065 | 0.307 | 0.563 | -0.050 / -0.115 / -0.162 | fails | push x2 | fwd 0.10 vx, back 0.10 vx, left 0.10 vy, step 0->0.10 |ss_err|, turn |wz| mean, turn |wz| min, falls, settled RMS worst |
+| kp_x0.7 | 0.080 | 0.141 | 0.221 | -0.056 ✗ | 0.078 | 0.809 | 1 ✗ | 0 | 0.064 | 0.298 | 0.515 | -0.015 / -0.056 / -0.086 | fails | push x3 | back 0.10 vx, falls |
+| kp_x1.3 | 0.107 | 0.224 | 0.360 | -0.130 | 0.128 | 1.124 | 0 | 0 | 0.074 | 0.328 ✗ | 0.988 ✗ | +0.012 / +0.027 / +0.053 | degraded | - | stand torque leg sum, substep peak worst |
+| kp_x1.4 | 0.110 | 0.233 | 0.377 | -0.138 | 0.130 | 1.128 | 0 | 0 | 0.075 | 0.335 ✗ | 0.921 ✗ | +0.015 / +0.036 / +0.070 | degraded | - | stand torque leg sum, substep peak worst |
+| kp_x2 | 0.114 | 0.264 | 0.408 | -0.148 | 0.096 | 1.117 | 0 | 0 | 0.076 ✗ | 0.366 ✗ | 1.351 ✗ | +0.019 / +0.067 / +0.101 | degraded | - | stand torque max joint, stand torque leg sum, settled RMS worst, substep peak worst |
+| kp_x4 | n/a | n/a | n/a | n/a | n/a | n/a | 5 ✗ | 0 | 0.556 ✗ | 3.461 ✗ | 2.166 ✗ | n/a / n/a / n/a | fails | schedule x3, steps x3, push x2, push_stand x2 | step 0->0.10 |ss_err|, stand drift |v_xy|, stand drift |wz|, falls, stand torque max joint, stand torque leg sum, settled RMS worst, substep peak worst |
+| kt_x0.8 | 0.106 | 0.199 | 0.288 | -0.112 | 0.127 | 1.002 | 0 | 0 | 0.065 | 0.294 | 0.521 | +0.011 / +0.002 / -0.019 | robust | - | - |
+| kt_x1.2 | 0.090 | 0.195 | 0.298 | -0.091 | 0.090 | 0.929 | 0 | 1 | 0.074 | 0.326 ✗ | 0.663 ⚠ | -0.005 / -0.001 / -0.009 | robust | - | stand torque leg sum |
+| R_x0.8 | 0.096 | 0.210 | 0.325 | -0.108 | 0.110 | 1.022 | 0 | 1 | 0.075 | 0.333 ✗ | 0.603 ⚠ | +0.001 / +0.013 / +0.018 | robust | - | stand torque leg sum |
+| R_x1.2 | 0.093 | 0.185 | 0.280 | -0.095 | 0.108 | 0.954 | 0 | 0 | 0.067 | 0.304 | 0.530 | -0.002 / -0.012 / -0.027 | robust | - | - |
+| delay5-8 | 0.098 | 0.198 | 0.297 | -0.108 | 0.112 | 0.928 | 0 | 0 | 0.071 | 0.322 ✗ | 0.560 | +0.003 / +0.001 / -0.010 | robust | - | stand torque leg sum |
+| delay8-12 | 0.091 | 0.175 | 0.243 | -0.120 | 0.104 | 0.587 ✗ | 0 | 0 | 0.071 | 0.326 ✗ | 0.641 ⚠ | -0.004 / -0.022 / -0.064 | degraded | - | turn |wz| mean, turn |wz| min, stand torque leg sum |
+| jvlag2 | 0.097 | 0.196 | 0.300 | -0.098 | 0.107 | 0.905 | 0 | 0 | 0.072 | 0.318 ✗ | 0.567 | +0.002 / -0.000 / -0.007 | degraded | - | turn |wz| min, stand torque leg sum |
+| backlash | 0.101 | 0.200 | 0.303 | -0.088 | 0.116 | 1.036 | 0 | 1 | 0.072 | 0.335 ✗ | 0.602 ⚠ | +0.006 / +0.003 / -0.004 | robust | - | stand torque leg sum |
+
+Gate rows judged against `hd1910_v1_final_eval_h2.json` (✗ = gated row fails, ⚠ = warning). Verdicts judge standing torque against the nominal row (see the script docstring).
+Δfwd = fwd 0.10 / 0.20 / 0.30 vx minus the nominal condition's. Push-rollout falls are at the 0.2 or 0.3 m/s kick while walking at 0.10 m/s.
+- **robust** (10): nominal, vin8.2, friction_x0.5, armature_x2, kt_x0.8, kt_x1.2, R_x0.8, R_x1.2, delay5-8, backlash
+- **degraded** (9): vin6.5, vin6.5_sag0.2, friction_x1.5, armature_x0.5, kp_x1.3, kp_x1.4, kp_x2, delay8-12, jvlag2
+- **fails** (5): friction_x2, armature_x1.5, kp_x0.5, kp_x0.7, kp_x4
