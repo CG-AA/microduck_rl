@@ -90,6 +90,17 @@ SERVO_DR_STAGES = [
 FORWARD_ENVS_STAGES = [(0, FORWARD_ENVS), (1200, FORWARD_ENVS_FINAL)]
 STAND_TORQUE_STAGES = [(0, STAND_TORQUE_WEIGHT), (2500, STAND_TORQUE_WEIGHT_FINAL)]
 NUM_STEPS_PER_ENV = 24  # curriculum steps are env steps: iteration x 24
+# -- v2d (2026-10-18): turning in place from a standstill. Every run turned from rest
+# at iteration 1000 (v2b@1000: +0.84 / -0.46 / +0.51 rad/s at +1.0 / -1.0 / +0.5) and
+# folded it into standing by 2000, when the standing share ramps to 25 %; v2b@5500
+# never turns from rest (harness v3). The stock track_angular_velocity (std 0.71)
+# keeps 61 % of its reward for standing still at a 0.5 rad/s command. Same fix as the
+# linear one: velstand's fine yaw term (std 0.35, weight 2) ADDED from step 0, on a
+# 0.5 s EMA so the per-step yaw oscillation of a stepping turn is not priced. Standing
+# at 0.5 rad/s then scores 0.13 instead of 1.0 on it: +1.7/step for turning.
+YAW_FINE_WEIGHT = 2.0
+YAW_FINE_STD = 0.35
+YAW_FINE_TAU_S = 0.5
 
 
 def apply_hd1910_recipe(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
@@ -105,6 +116,11 @@ def apply_hd1910_recipe(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
         func=microduck_mdp.track_linear_velocity_fine,
         weight=FINE_LIN_VEL_WEIGHT,
         params={"std": FINE_LIN_VEL_STD, "command_name": "twist", "tau_s": FINE_LIN_VEL_TAU_S},
+    )
+    cfg.rewards["track_yaw_rate_fine"] = RewardTermCfg(
+        func=microduck_mdp.track_yaw_rate_fine,
+        weight=YAW_FINE_WEIGHT,
+        params={"std": YAW_FINE_STD, "command_name": "twist", "tau_s": YAW_FINE_TAU_S},
     )
     twist = deepcopy(cfg.commands["twist"])
     twist.rel_slow_envs = SLOW_ENVS

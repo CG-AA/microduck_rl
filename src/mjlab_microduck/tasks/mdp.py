@@ -5589,6 +5589,7 @@ def track_yaw_rate_fine(
     std: float,
     command_name: str,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+    tau_s: float | None = None,
 ) -> torch.Tensor:
     """Yaw-rate-only Gaussian, exp(-(wz_cmd - wz)²/std²), ADDED next to the stock
     track_angular_velocity (which stays as is).
@@ -5600,10 +5601,24 @@ def track_yaw_rate_fine(
     into the yaw error. REPLACING it with a sharp yaw term (run sape62zb) made turning
     WORSE (1.0 rad/s: 0.42 → 0.16): a std-0.35 Gaussian has ~no gradient at the policy's
     0.6 rad/s error. Adding a fine term keeps the stock term's far-error gradient and
-    prices small errors: margin at 0.6 rad/s +0.33 → +0.97, at 1.0 +0.62 → +1.05."""
+    prices small errors: margin at 0.6 rad/s +0.33 → +0.97, at 1.0 +0.62 → +1.05.
+
+    ``tau_s`` (HD-1910 v2d, 2026-10-18): Gaussian on an EMA of the yaw rate instead of the
+    instantaneous one, as track_linear_velocity_fine does for xy: turning in place by
+    stepping makes the yaw rate oscillate per step, an error the policy cannot escape;
+    the EMA prices the DC error only. None (default, velstand) = instantaneous."""
     asset: Entity = env.scene[asset_cfg.name]
     cmd = env.command_manager.get_command(command_name)
-    return torch.exp(-torch.square(cmd[:, 2] - asset.data.root_link_ang_vel_b[:, 2]) / std**2)
+    wz = asset.data.root_link_ang_vel_b[:, 2]
+    if tau_s is not None:
+        if not hasattr(env, "_yaw_rate_ema"):
+            env._yaw_rate_ema = torch.zeros_like(wz)
+        fresh = env.episode_length_buf <= 1  # freshly reset envs start the average at their measured rate
+        env._yaw_rate_ema[fresh] = wz[fresh]
+        alpha = min(1.0, float(env.step_dt) / max(tau_s, 1e-6))
+        env._yaw_rate_ema = (1.0 - alpha) * env._yaw_rate_ema + alpha * wz
+        wz = env._yaw_rate_ema
+    return torch.exp(-torch.square(cmd[:, 2] - wz) / std**2)
 
 
 def track_linear_velocity_fine(

@@ -308,3 +308,44 @@ def test_randomize_bam_gain_scale_spans_its_range():
     before = act.kp_scale[10:].clone()
     microduck_mdp.randomize_bam_gain_scale(env, ids, kp_range=(1.0, 1.0))
     assert torch.all(act.kp_scale[:10] == 1.0) and torch.equal(act.kp_scale[10:], before)
+
+
+def test_hd1910_v2d_adds_the_smoothed_fine_yaw_term():
+    """v2d: both HD-1910 tasks carry track_yaw_rate_fine (std 0.35, weight 2, 0.5 s EMA) next to the stock
+    track_angular_velocity, which is untouched; the XL330 task does not get it."""
+    from mjlab.tasks.registry import load_env_cfg
+    from mjlab_microduck.tasks import hd1910
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    for task in ("Mjlab-Velocity-Flat-MicroDuck-HD1910", "Mjlab-Velocity-Flat-Backlash-MicroDuck-HD1910"):
+        cfg = load_env_cfg(task)
+        t = cfg.rewards["track_yaw_rate_fine"]
+        assert t.func is microduck_mdp.track_yaw_rate_fine and t.weight == hd1910.YAW_FINE_WEIGHT == 2.0
+        assert t.params == {"std": 0.35, "command_name": "twist", "tau_s": 0.5}
+        assert cfg.rewards["track_angular_velocity"].weight == 2.0
+        assert cfg.rewards["track_angular_velocity"].params["std"] == pytest.approx(math.sqrt(0.5))
+    assert "track_yaw_rate_fine" not in load_env_cfg("Mjlab-Velocity-Flat-MicroDuck").rewards
+
+
+def test_track_yaw_rate_fine_ema_prices_the_dc_error_only():
+    """With tau_s the term sees the yaw rate's running mean: a stepping turn oscillating around the command
+    scores near 1, standing still at a 0.5 rad/s command scores exp(-0.25/0.35²) = 0.13; without tau_s
+    (velstand) the instantaneous rate is used, as before."""
+    import types
+    import torch
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    n = 2
+    data = types.SimpleNamespace(root_link_ang_vel_b=torch.zeros(n, 3))
+    env = types.SimpleNamespace(step_dt=0.02, episode_length_buf=torch.full((n,), 100),
+                                command_manager=types.SimpleNamespace(get_command=lambda name: torch.tensor([[0, 0, 0.5]] * n)),
+                                scene={"robot": types.SimpleNamespace(data=data)})
+    out = None
+    for k in range(400):  # env 0 oscillates 0.5 +- 0.4 at 2.5 Hz (a stepping turn); env 1 stands still
+        data.root_link_ang_vel_b[0, 2] = 0.5 + 0.4 * math.sin(2 * math.pi * 2.5 * k * 0.02)
+        data.root_link_ang_vel_b[1, 2] = 0.0
+        out = microduck_mdp.track_yaw_rate_fine(env, std=0.35, command_name="twist", tau_s=0.5)
+    assert out[0] > 0.97 and out[1] == pytest.approx(math.exp(-0.25 / 0.35**2), rel=1e-3)
+    data.root_link_ang_vel_b[0, 2] = 0.9  # instantaneous (velstand default) sees the peak
+    inst = microduck_mdp.track_yaw_rate_fine(env, std=0.35, command_name="twist")
+    assert inst[0] == pytest.approx(math.exp(-0.16 / 0.35**2), rel=1e-3)
