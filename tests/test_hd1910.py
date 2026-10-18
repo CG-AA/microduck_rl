@@ -216,7 +216,7 @@ def test_track_linear_velocity_fine_prices_small_errors_through_an_ema():
 def test_hd1910_v2c_levers_and_servo_dr_are_staged():
     """v2c: the HD-1910 tasks start exactly as v2b (stock servo DR, no gain DR, forward bucket 0.2,
     stand_torque -2) and curricula bring in the wide servo DR (600 / 1200), drop the forward-only
-    bucket (1200) and raise stand_torque at 2500 (v2d: -20, v2e: -8). The XL330 task gets none of it."""
+    bucket (1200) and raise stand_torque to -20 at 2500 (v2e's -8 was tried and rejected). The XL330 task gets none of it."""
     from mjlab.tasks.registry import load_env_cfg
     from mjlab_microduck.tasks import hd1910
     from mjlab_microduck.tasks import mdp as microduck_mdp
@@ -245,7 +245,7 @@ def test_hd1910_v2c_levers_and_servo_dr_are_staged():
         st = cur["stand_torque_weight"].params
         assert st["reward_name"] == "stand_torque"
         assert st["weight_stages"] == [{"step": 0, "weight": -2.0}, {"step": it(2500), "weight": hd1910.STAND_TORQUE_WEIGHT_FINAL}]
-        assert hd1910.STAND_TORQUE_WEIGHT_FINAL == -8.0  # v2e (v2d used -20)
+        assert hd1910.STAND_TORQUE_WEIGHT_FINAL == -20.0  # v2d (v2e's -8 did not pass)
         for name in ("randomize_joint_friction_stages", "randomize_armature_stages", "randomize_motor_gains_stages"):
             assert cur[name].func is microduck_mdp.event_params_curriculum
             assert cur[name].params["stages"][0]["params"] == {  # stage 0 equals the event's own params

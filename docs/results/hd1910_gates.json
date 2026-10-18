@@ -3418,5 +3418,1240 @@
     "verdict": "pass"
    }
   }
+ },
+ {
+  "checkpoint": "v2e_s42@3000 (h3, 3r)",
+  "source": "hd1910_v2e_s42_3000_eval_h3.json",
+  "replicas": 3,
+  "rows": {
+   "fwd 0.10 vx [m/s]": {
+    "value": 0.08975185147879539,
+    "verdict": "pass"
+   },
+   "back 0.10 vx [m/s]": {
+    "value": 8.970034358530621e-05,
+    "verdict": "FAIL"
+   },
+   "left 0.10 vy [m/s]": {
+    "value": -0.00010245991026573615,
+    "verdict": "FAIL"
+   },
+   "step 0->0.10 t90 [s]": {
+    "value": 2.04,
+    "verdict": "FAIL"
+   },
+   "step 0->0.10 |ss_err| [m/s]": {
+    "value": 0.009528612196812072,
+    "verdict": "pass"
+   },
+   "step 0.20->0 t_stop [s]": {
+    "value": 0.42,
+    "verdict": "pass"
+   },
+   "fwd 0.20 vx [m/s]": {
+    "value": 0.18425787327016419,
+    "verdict": "pass"
+   },
+   "fwd 0.30 vx [m/s]": {
+    "value": 0.26641129319455015,
+    "verdict": "pass"
+   },
+   "turn |wz| mean [rad/s]": {
+    "value": 1.031895325294858,
+    "verdict": "pass"
+   },
+   "turn |wz| min [rad/s]": {
+    "value": 0.8965366289681703,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @1.0 [rad/s]": {
+    "value": 0.8931017889948029,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @0.5 [rad/s]": {
+    "value": 0.36245854304755376,
+    "verdict": "pass"
+   },
+   "stand drift |v_xy| [m/s]": {
+    "value": 7.901791031188698e-05,
+    "verdict": "pass"
+   },
+   "stand drift |wz| [rad/s]": {
+    "value": 0.0009743181760343667,
+    "verdict": "pass"
+   },
+   "falls (sched/steps/stand/kick<=0.3)": {
+    "value": 0,
+    "verdict": "pass"
+   },
+   "falls at the 0.4 kick (report)": {
+    "value": 0,
+    "verdict": "report"
+   },
+   "stand torque max joint [N.m]": {
+    "value": 0.06399999999999999,
+    "verdict": "pass"
+   },
+   "stand torque leg sum [N.m]": {
+    "value": 0.2596,
+    "verdict": "pass"
+   },
+   "settled RMS worst [N.m]": {
+    "value": 0.24736666666666665,
+    "verdict": "pass"
+   },
+   "substep peak worst [N.m]": {
+    "value": 0.8367666666666667,
+    "verdict": "warn"
+   },
+   "speed_util_max (report)": {
+    "value": 0.569675435071539,
+    "verdict": "report"
+   },
+   "speed_util_frac": {
+    "value": 0.0,
+    "verdict": "pass"
+   }
+  }
+ },
+ {
+  "checkpoint": "v2e_s42@3500 (h3, 3r)",
+  "source": "hd1910_v2e_s42_3500_eval_h3.json",
+  "replicas": 3,
+  "rows": {
+   "fwd 0.10 vx [m/s]": {
+    "value": 0.10022886903760675,
+    "verdict": "pass"
+   },
+   "back 0.10 vx [m/s]": {
+    "value": 0.00013030875109121853,
+    "verdict": "FAIL"
+   },
+   "left 0.10 vy [m/s]": {
+    "value": 0.07831687107417744,
+    "verdict": "pass"
+   },
+   "step 0->0.10 t90 [s]": {
+    "value": 2.4933333333333336,
+    "verdict": "FAIL"
+   },
+   "step 0->0.10 |ss_err| [m/s]": {
+    "value": 0.0007505962693930002,
+    "verdict": "pass"
+   },
+   "step 0.20->0 t_stop [s]": {
+    "value": 0.35333333333333333,
+    "verdict": "pass"
+   },
+   "fwd 0.20 vx [m/s]": {
+    "value": 0.18535710282117931,
+    "verdict": "pass"
+   },
+   "fwd 0.30 vx [m/s]": {
+    "value": 0.255105655142289,
+    "verdict": "pass"
+   },
+   "turn |wz| mean [rad/s]": {
+    "value": 1.2433431593022366,
+    "verdict": "pass"
+   },
+   "turn |wz| min [rad/s]": {
+    "value": 1.2132292397334707,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @1.0 [rad/s]": {
+    "value": 1.2151463547861647,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @0.5 [rad/s]": {
+    "value": 0.48391898176922243,
+    "verdict": "pass"
+   },
+   "stand drift |v_xy| [m/s]": {
+    "value": 0.00021955186484477448,
+    "verdict": "pass"
+   },
+   "stand drift |wz| [rad/s]": {
+    "value": 0.0014907773762159002,
+    "verdict": "pass"
+   },
+   "falls (sched/steps/stand/kick<=0.3)": {
+    "value": 0,
+    "verdict": "pass"
+   },
+   "falls at the 0.4 kick (report)": {
+    "value": 1,
+    "verdict": "report"
+   },
+   "stand torque max joint [N.m]": {
+    "value": 0.04033333333333333,
+    "verdict": "pass"
+   },
+   "stand torque leg sum [N.m]": {
+    "value": 0.18406666666666666,
+    "verdict": "pass"
+   },
+   "settled RMS worst [N.m]": {
+    "value": 0.3211333333333333,
+    "verdict": "FAIL"
+   },
+   "substep peak worst [N.m]": {
+    "value": 0.8965666666666666,
+    "verdict": "warn"
+   },
+   "speed_util_max (report)": {
+    "value": 0.6972303312879532,
+    "verdict": "report"
+   },
+   "speed_util_frac": {
+    "value": 0.0,
+    "verdict": "pass"
+   }
+  }
+ },
+ {
+  "checkpoint": "v2e_s42@4000 (h3, 3r)",
+  "source": "hd1910_v2e_s42_4000_eval_h3.json",
+  "replicas": 3,
+  "rows": {
+   "fwd 0.10 vx [m/s]": {
+    "value": 0.10386729229385755,
+    "verdict": "pass"
+   },
+   "back 0.10 vx [m/s]": {
+    "value": -0.09026903056046999,
+    "verdict": "pass"
+   },
+   "left 0.10 vy [m/s]": {
+    "value": 0.07576848243360303,
+    "verdict": "pass"
+   },
+   "step 0->0.10 t90 [s]": {
+    "value": 1.78,
+    "verdict": "FAIL"
+   },
+   "step 0->0.10 |ss_err| [m/s]": {
+    "value": 0.005493988273079157,
+    "verdict": "pass"
+   },
+   "step 0.20->0 t_stop [s]": {
+    "value": 0.35333333333333333,
+    "verdict": "pass"
+   },
+   "fwd 0.20 vx [m/s]": {
+    "value": 0.18708867021800435,
+    "verdict": "pass"
+   },
+   "fwd 0.30 vx [m/s]": {
+    "value": 0.24925868861352218,
+    "verdict": "pass"
+   },
+   "turn |wz| mean [rad/s]": {
+    "value": 1.1638338757361302,
+    "verdict": "pass"
+   },
+   "turn |wz| min [rad/s]": {
+    "value": 1.1264732776125117,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @1.0 [rad/s]": {
+    "value": 1.1219208222130412,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @0.5 [rad/s]": {
+    "value": 0.5108759288762934,
+    "verdict": "pass"
+   },
+   "stand drift |v_xy| [m/s]": {
+    "value": 0.0001313974255163743,
+    "verdict": "pass"
+   },
+   "stand drift |wz| [rad/s]": {
+    "value": 0.000305503760150862,
+    "verdict": "pass"
+   },
+   "falls (sched/steps/stand/kick<=0.3)": {
+    "value": 0,
+    "verdict": "pass"
+   },
+   "falls at the 0.4 kick (report)": {
+    "value": 0,
+    "verdict": "report"
+   },
+   "stand torque max joint [N.m]": {
+    "value": 0.0404,
+    "verdict": "pass"
+   },
+   "stand torque leg sum [N.m]": {
+    "value": 0.2275333333333333,
+    "verdict": "pass"
+   },
+   "settled RMS worst [N.m]": {
+    "value": 0.2692,
+    "verdict": "pass"
+   },
+   "substep peak worst [N.m]": {
+    "value": 0.9377333333333334,
+    "verdict": "FAIL"
+   },
+   "speed_util_max (report)": {
+    "value": 0.75844697436819,
+    "verdict": "report"
+   },
+   "speed_util_frac": {
+    "value": 0.0,
+    "verdict": "pass"
+   }
+  }
+ },
+ {
+  "checkpoint": "v2e_s42@5000 (h3, 3r)",
+  "source": "hd1910_v2e_s42_5000_eval_h3.json",
+  "replicas": 3,
+  "rows": {
+   "fwd 0.10 vx [m/s]": {
+    "value": 0.01869684920925108,
+    "verdict": "FAIL"
+   },
+   "back 0.10 vx [m/s]": {
+    "value": 9.54863270418922e-05,
+    "verdict": "FAIL"
+   },
+   "left 0.10 vy [m/s]": {
+    "value": 4.729028448957254e-05,
+    "verdict": "FAIL"
+   },
+   "step 0->0.10 t90 [s]": {
+    "value": 5.890000000000001,
+    "verdict": "FAIL"
+   },
+   "step 0->0.10 |ss_err| [m/s]": {
+    "value": 0.0867293506280568,
+    "verdict": "FAIL"
+   },
+   "step 0.20->0 t_stop [s]": {
+    "value": 0.3866666666666667,
+    "verdict": "pass"
+   },
+   "fwd 0.20 vx [m/s]": {
+    "value": 0.1896955690333596,
+    "verdict": "pass"
+   },
+   "fwd 0.30 vx [m/s]": {
+    "value": 0.23715973104797827,
+    "verdict": "pass"
+   },
+   "turn |wz| mean [rad/s]": {
+    "value": 1.054988402239446,
+    "verdict": "pass"
+   },
+   "turn |wz| min [rad/s]": {
+    "value": 0.9577869974705443,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @1.0 [rad/s]": {
+    "value": 0.9666823149674216,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @0.5 [rad/s]": {
+    "value": 0.3905973630013053,
+    "verdict": "pass"
+   },
+   "stand drift |v_xy| [m/s]": {
+    "value": 0.0002259069606815322,
+    "verdict": "pass"
+   },
+   "stand drift |wz| [rad/s]": {
+    "value": 0.0022012334768590045,
+    "verdict": "pass"
+   },
+   "falls (sched/steps/stand/kick<=0.3)": {
+    "value": 0,
+    "verdict": "pass"
+   },
+   "falls at the 0.4 kick (report)": {
+    "value": 0,
+    "verdict": "report"
+   },
+   "stand torque max joint [N.m]": {
+    "value": 0.04409999999999999,
+    "verdict": "pass"
+   },
+   "stand torque leg sum [N.m]": {
+    "value": 0.2172,
+    "verdict": "pass"
+   },
+   "settled RMS worst [N.m]": {
+    "value": 0.2697,
+    "verdict": "pass"
+   },
+   "substep peak worst [N.m]": {
+    "value": 0.9736333333333334,
+    "verdict": "FAIL"
+   },
+   "speed_util_max (report)": {
+    "value": 0.65578704149899,
+    "verdict": "report"
+   },
+   "speed_util_frac": {
+    "value": 0.0,
+    "verdict": "pass"
+   }
+  }
+ },
+ {
+  "checkpoint": "v2e_s42@5500 (h3, 3r)",
+  "source": "hd1910_v2e_s42_5500_eval_h3.json",
+  "replicas": 3,
+  "rows": {
+   "fwd 0.10 vx [m/s]": {
+    "value": -9.199722958863519e-05,
+    "verdict": "FAIL"
+   },
+   "back 0.10 vx [m/s]": {
+    "value": 0.00013004069831789507,
+    "verdict": "FAIL"
+   },
+   "left 0.10 vy [m/s]": {
+    "value": -3.4193765329947324e-06,
+    "verdict": "FAIL"
+   },
+   "step 0->0.10 t90 [s]": {
+    "value": null,
+    "verdict": "n/a"
+   },
+   "step 0->0.10 |ss_err| [m/s]": {
+    "value": 0.10013774643344199,
+    "verdict": "FAIL"
+   },
+   "step 0.20->0 t_stop [s]": {
+    "value": 0.4133333333333334,
+    "verdict": "pass"
+   },
+   "fwd 0.20 vx [m/s]": {
+    "value": 0.1754937423266476,
+    "verdict": "pass"
+   },
+   "fwd 0.30 vx [m/s]": {
+    "value": 0.21942887919303403,
+    "verdict": "pass"
+   },
+   "turn |wz| mean [rad/s]": {
+    "value": 1.1856223932855845,
+    "verdict": "pass"
+   },
+   "turn |wz| min [rad/s]": {
+    "value": 1.1206205839389085,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @1.0 [rad/s]": {
+    "value": 1.1488362362939453,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @0.5 [rad/s]": {
+    "value": 0.44852559931930847,
+    "verdict": "pass"
+   },
+   "stand drift |v_xy| [m/s]": {
+    "value": 0.00029788659887194485,
+    "verdict": "pass"
+   },
+   "stand drift |wz| [rad/s]": {
+    "value": 0.0062074846375755706,
+    "verdict": "pass"
+   },
+   "falls (sched/steps/stand/kick<=0.3)": {
+    "value": 0,
+    "verdict": "pass"
+   },
+   "falls at the 0.4 kick (report)": {
+    "value": 0,
+    "verdict": "report"
+   },
+   "stand torque max joint [N.m]": {
+    "value": 0.04806666666666667,
+    "verdict": "pass"
+   },
+   "stand torque leg sum [N.m]": {
+    "value": 0.22716666666666666,
+    "verdict": "pass"
+   },
+   "settled RMS worst [N.m]": {
+    "value": 0.24736666666666665,
+    "verdict": "pass"
+   },
+   "substep peak worst [N.m]": {
+    "value": 0.8511333333333333,
+    "verdict": "warn"
+   },
+   "speed_util_max (report)": {
+    "value": 0.6352042038870809,
+    "verdict": "report"
+   },
+   "speed_util_frac": {
+    "value": 0.0,
+    "verdict": "pass"
+   }
+  }
+ },
+ {
+  "checkpoint": "v2e_s42@5750 (h3, 3r)",
+  "source": "hd1910_v2e_s42_5750_eval_h3.json",
+  "replicas": 3,
+  "rows": {
+   "fwd 0.10 vx [m/s]": {
+    "value": 0.08217983728698593,
+    "verdict": "pass"
+   },
+   "back 0.10 vx [m/s]": {
+    "value": -4.796059877446035e-05,
+    "verdict": "FAIL"
+   },
+   "left 0.10 vy [m/s]": {
+    "value": 0.06352459016231028,
+    "verdict": "pass"
+   },
+   "step 0->0.10 t90 [s]": {
+    "value": 3.3066666666666666,
+    "verdict": "FAIL"
+   },
+   "step 0->0.10 |ss_err| [m/s]": {
+    "value": 0.004882042772364546,
+    "verdict": "pass"
+   },
+   "step 0.20->0 t_stop [s]": {
+    "value": 0.3866666666666667,
+    "verdict": "pass"
+   },
+   "fwd 0.20 vx [m/s]": {
+    "value": 0.18117215941172393,
+    "verdict": "pass"
+   },
+   "fwd 0.30 vx [m/s]": {
+    "value": 0.22839574947352526,
+    "verdict": "pass"
+   },
+   "turn |wz| mean [rad/s]": {
+    "value": 1.2401062232334708,
+    "verdict": "pass"
+   },
+   "turn |wz| min [rad/s]": {
+    "value": 1.1605165599355007,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @1.0 [rad/s]": {
+    "value": 1.150888738077276,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @0.5 [rad/s]": {
+    "value": 0.3293511848356196,
+    "verdict": "pass"
+   },
+   "stand drift |v_xy| [m/s]": {
+    "value": 0.00023495007438539736,
+    "verdict": "pass"
+   },
+   "stand drift |wz| [rad/s]": {
+    "value": 0.0024548151036845596,
+    "verdict": "pass"
+   },
+   "falls (sched/steps/stand/kick<=0.3)": {
+    "value": 1,
+    "verdict": "FAIL"
+   },
+   "falls at the 0.4 kick (report)": {
+    "value": 0,
+    "verdict": "report"
+   },
+   "stand torque max joint [N.m]": {
+    "value": 0.0605,
+    "verdict": "pass"
+   },
+   "stand torque leg sum [N.m]": {
+    "value": 0.2508666666666667,
+    "verdict": "pass"
+   },
+   "settled RMS worst [N.m]": {
+    "value": 0.25153333333333333,
+    "verdict": "pass"
+   },
+   "substep peak worst [N.m]": {
+    "value": 0.7105,
+    "verdict": "warn"
+   },
+   "speed_util_max (report)": {
+    "value": 0.6299654064680443,
+    "verdict": "report"
+   },
+   "speed_util_frac": {
+    "value": 0.0,
+    "verdict": "pass"
+   }
+  }
+ },
+ {
+  "checkpoint": "v2e_s42@5999 (h3, 3r)",
+  "source": "hd1910_v2e_s42_5999_eval_h3.json",
+  "replicas": 3,
+  "rows": {
+   "fwd 0.10 vx [m/s]": {
+    "value": -0.00012557813760335907,
+    "verdict": "FAIL"
+   },
+   "back 0.10 vx [m/s]": {
+    "value": -0.10641002189197589,
+    "verdict": "pass"
+   },
+   "left 0.10 vy [m/s]": {
+    "value": 0.0689534374093596,
+    "verdict": "pass"
+   },
+   "step 0->0.10 t90 [s]": {
+    "value": null,
+    "verdict": "n/a"
+   },
+   "step 0->0.10 |ss_err| [m/s]": {
+    "value": 0.10020428169392114,
+    "verdict": "FAIL"
+   },
+   "step 0.20->0 t_stop [s]": {
+    "value": 0.35333333333333333,
+    "verdict": "pass"
+   },
+   "fwd 0.20 vx [m/s]": {
+    "value": 0.17306316315228276,
+    "verdict": "pass"
+   },
+   "fwd 0.30 vx [m/s]": {
+    "value": 0.20974882760017402,
+    "verdict": "pass"
+   },
+   "turn |wz| mean [rad/s]": {
+    "value": 1.0412766062619874,
+    "verdict": "pass"
+   },
+   "turn |wz| min [rad/s]": {
+    "value": 1.0043468849079755,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @1.0 [rad/s]": {
+    "value": 1.0373948349359792,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @0.5 [rad/s]": {
+    "value": 0.4312062294782712,
+    "verdict": "pass"
+   },
+   "stand drift |v_xy| [m/s]": {
+    "value": 0.0002709310800629066,
+    "verdict": "pass"
+   },
+   "stand drift |wz| [rad/s]": {
+    "value": 0.008359541664854855,
+    "verdict": "pass"
+   },
+   "falls (sched/steps/stand/kick<=0.3)": {
+    "value": 0,
+    "verdict": "pass"
+   },
+   "falls at the 0.4 kick (report)": {
+    "value": 0,
+    "verdict": "report"
+   },
+   "stand torque max joint [N.m]": {
+    "value": 0.05953333333333333,
+    "verdict": "pass"
+   },
+   "stand torque leg sum [N.m]": {
+    "value": 0.24773333333333333,
+    "verdict": "pass"
+   },
+   "settled RMS worst [N.m]": {
+    "value": 0.27623333333333333,
+    "verdict": "pass"
+   },
+   "substep peak worst [N.m]": {
+    "value": 0.8515666666666667,
+    "verdict": "warn"
+   },
+   "speed_util_max (report)": {
+    "value": 0.6520811461952888,
+    "verdict": "report"
+   },
+   "speed_util_frac": {
+    "value": 0.0,
+    "verdict": "pass"
+   }
+  }
+ },
+ {
+  "checkpoint": "v2e_s7@3000 (h3, 3r)",
+  "source": "hd1910_v2e_s7_3000_eval_h3.json",
+  "replicas": 3,
+  "rows": {
+   "fwd 0.10 vx [m/s]": {
+    "value": 0.07964701134089537,
+    "verdict": "pass"
+   },
+   "back 0.10 vx [m/s]": {
+    "value": -0.10169252479340203,
+    "verdict": "pass"
+   },
+   "left 0.10 vy [m/s]": {
+    "value": 0.09263300580258345,
+    "verdict": "pass"
+   },
+   "step 0->0.10 t90 [s]": {
+    "value": 0.9866666666666667,
+    "verdict": "pass"
+   },
+   "step 0->0.10 |ss_err| [m/s]": {
+    "value": 0.018946150398415722,
+    "verdict": "pass"
+   },
+   "step 0.20->0 t_stop [s]": {
+    "value": 0.36000000000000004,
+    "verdict": "pass"
+   },
+   "fwd 0.20 vx [m/s]": {
+    "value": 0.15696511129073223,
+    "verdict": "pass"
+   },
+   "fwd 0.30 vx [m/s]": {
+    "value": 0.20469757301605992,
+    "verdict": "pass"
+   },
+   "turn |wz| mean [rad/s]": {
+    "value": 1.0692366231970394,
+    "verdict": "pass"
+   },
+   "turn |wz| min [rad/s]": {
+    "value": 1.004258020289305,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @1.0 [rad/s]": {
+    "value": 1.0201985587097901,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @0.5 [rad/s]": {
+    "value": 0.5988569810908272,
+    "verdict": "pass"
+   },
+   "stand drift |v_xy| [m/s]": {
+    "value": 0.000148934476867545,
+    "verdict": "pass"
+   },
+   "stand drift |wz| [rad/s]": {
+    "value": 0.002368219138773994,
+    "verdict": "pass"
+   },
+   "falls (sched/steps/stand/kick<=0.3)": {
+    "value": 0,
+    "verdict": "pass"
+   },
+   "falls at the 0.4 kick (report)": {
+    "value": 0,
+    "verdict": "report"
+   },
+   "stand torque max joint [N.m]": {
+    "value": 0.0458,
+    "verdict": "pass"
+   },
+   "stand torque leg sum [N.m]": {
+    "value": 0.26316666666666666,
+    "verdict": "pass"
+   },
+   "settled RMS worst [N.m]": {
+    "value": 0.17800000000000002,
+    "verdict": "pass"
+   },
+   "substep peak worst [N.m]": {
+    "value": 0.7801333333333335,
+    "verdict": "warn"
+   },
+   "speed_util_max (report)": {
+    "value": 0.6403187651516208,
+    "verdict": "report"
+   },
+   "speed_util_frac": {
+    "value": 0.0,
+    "verdict": "pass"
+   }
+  }
+ },
+ {
+  "checkpoint": "v2e_s7@4000 (h3, 3r)",
+  "source": "hd1910_v2e_s7_4000_eval_h3.json",
+  "replicas": 3,
+  "rows": {
+   "fwd 0.10 vx [m/s]": {
+    "value": -0.00014930088269510597,
+    "verdict": "FAIL"
+   },
+   "back 0.10 vx [m/s]": {
+    "value": -0.030866494596759723,
+    "verdict": "FAIL"
+   },
+   "left 0.10 vy [m/s]": {
+    "value": 0.03322355936715033,
+    "verdict": "FAIL"
+   },
+   "step 0->0.10 t90 [s]": {
+    "value": null,
+    "verdict": "n/a"
+   },
+   "step 0->0.10 |ss_err| [m/s]": {
+    "value": 0.10015446419906605,
+    "verdict": "FAIL"
+   },
+   "step 0.20->0 t_stop [s]": {
+    "value": 0.37333333333333335,
+    "verdict": "pass"
+   },
+   "fwd 0.20 vx [m/s]": {
+    "value": 0.14324023658401863,
+    "verdict": "pass"
+   },
+   "fwd 0.30 vx [m/s]": {
+    "value": 0.17303290622527254,
+    "verdict": "pass"
+   },
+   "turn |wz| mean [rad/s]": {
+    "value": 1.0448763049409895,
+    "verdict": "pass"
+   },
+   "turn |wz| min [rad/s]": {
+    "value": 0.9943002894230059,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @1.0 [rad/s]": {
+    "value": 0.9766965481286483,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @0.5 [rad/s]": {
+    "value": 0.5067357284109103,
+    "verdict": "pass"
+   },
+   "stand drift |v_xy| [m/s]": {
+    "value": 0.00048148759778713984,
+    "verdict": "pass"
+   },
+   "stand drift |wz| [rad/s]": {
+    "value": 0.0016281489410370715,
+    "verdict": "pass"
+   },
+   "falls (sched/steps/stand/kick<=0.3)": {
+    "value": 0,
+    "verdict": "pass"
+   },
+   "falls at the 0.4 kick (report)": {
+    "value": 1,
+    "verdict": "report"
+   },
+   "stand torque max joint [N.m]": {
+    "value": 0.04686666666666667,
+    "verdict": "pass"
+   },
+   "stand torque leg sum [N.m]": {
+    "value": 0.2418,
+    "verdict": "pass"
+   },
+   "settled RMS worst [N.m]": {
+    "value": 0.1989,
+    "verdict": "pass"
+   },
+   "substep peak worst [N.m]": {
+    "value": 1.0221333333333333,
+    "verdict": "FAIL"
+   },
+   "speed_util_max (report)": {
+    "value": 0.6558602259226461,
+    "verdict": "report"
+   },
+   "speed_util_frac": {
+    "value": 0.0,
+    "verdict": "pass"
+   }
+  }
+ },
+ {
+  "checkpoint": "v2e_s7@5000 (h3, 3r)",
+  "source": "hd1910_v2e_s7_5000_eval_h3.json",
+  "replicas": 3,
+  "rows": {
+   "fwd 0.10 vx [m/s]": {
+    "value": -6.876131545207657e-05,
+    "verdict": "FAIL"
+   },
+   "back 0.10 vx [m/s]": {
+    "value": -0.06545160906887486,
+    "verdict": "pass"
+   },
+   "left 0.10 vy [m/s]": {
+    "value": 0.0841600420187275,
+    "verdict": "pass"
+   },
+   "step 0->0.10 t90 [s]": {
+    "value": null,
+    "verdict": "n/a"
+   },
+   "step 0->0.10 |ss_err| [m/s]": {
+    "value": 0.10009476481781372,
+    "verdict": "FAIL"
+   },
+   "step 0.20->0 t_stop [s]": {
+    "value": 0.39333333333333337,
+    "verdict": "pass"
+   },
+   "fwd 0.20 vx [m/s]": {
+    "value": 0.16847144248484258,
+    "verdict": "pass"
+   },
+   "fwd 0.30 vx [m/s]": {
+    "value": 0.20548270462334586,
+    "verdict": "pass"
+   },
+   "turn |wz| mean [rad/s]": {
+    "value": 1.3845280719276523,
+    "verdict": "pass"
+   },
+   "turn |wz| min [rad/s]": {
+    "value": 1.338113720818723,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @1.0 [rad/s]": {
+    "value": 1.319366734786134,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @0.5 [rad/s]": {
+    "value": 0.6246599239595029,
+    "verdict": "pass"
+   },
+   "stand drift |v_xy| [m/s]": {
+    "value": 0.00021874966242706802,
+    "verdict": "pass"
+   },
+   "stand drift |wz| [rad/s]": {
+    "value": 0.005613436009323539,
+    "verdict": "pass"
+   },
+   "falls (sched/steps/stand/kick<=0.3)": {
+    "value": 0,
+    "verdict": "pass"
+   },
+   "falls at the 0.4 kick (report)": {
+    "value": 1,
+    "verdict": "report"
+   },
+   "stand torque max joint [N.m]": {
+    "value": 0.05246666666666666,
+    "verdict": "pass"
+   },
+   "stand torque leg sum [N.m]": {
+    "value": 0.2366,
+    "verdict": "pass"
+   },
+   "settled RMS worst [N.m]": {
+    "value": 0.17963333333333334,
+    "verdict": "pass"
+   },
+   "substep peak worst [N.m]": {
+    "value": 0.8985,
+    "verdict": "warn"
+   },
+   "speed_util_max (report)": {
+    "value": 0.6829440326208314,
+    "verdict": "report"
+   },
+   "speed_util_frac": {
+    "value": 0.0,
+    "verdict": "pass"
+   }
+  }
+ },
+ {
+  "checkpoint": "v2e_s7@5500 (h3, 3r)",
+  "source": "hd1910_v2e_s7_5500_eval_h3.json",
+  "replicas": 3,
+  "rows": {
+   "fwd 0.10 vx [m/s]": {
+    "value": 7.813338028240998e-05,
+    "verdict": "FAIL"
+   },
+   "back 0.10 vx [m/s]": {
+    "value": -0.10511777183759029,
+    "verdict": "pass"
+   },
+   "left 0.10 vy [m/s]": {
+    "value": 0.10812152378749401,
+    "verdict": "pass"
+   },
+   "step 0->0.10 t90 [s]": {
+    "value": null,
+    "verdict": "n/a"
+   },
+   "step 0->0.10 |ss_err| [m/s]": {
+    "value": 0.09990774480533214,
+    "verdict": "FAIL"
+   },
+   "step 0.20->0 t_stop [s]": {
+    "value": 0.32666666666666666,
+    "verdict": "pass"
+   },
+   "fwd 0.20 vx [m/s]": {
+    "value": 0.1337095723935341,
+    "verdict": "pass"
+   },
+   "fwd 0.30 vx [m/s]": {
+    "value": 0.1587106365300602,
+    "verdict": "pass"
+   },
+   "turn |wz| mean [rad/s]": {
+    "value": 1.3318711256495501,
+    "verdict": "pass"
+   },
+   "turn |wz| min [rad/s]": {
+    "value": 1.1119356953403108,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @1.0 [rad/s]": {
+    "value": 1.105280997882673,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @0.5 [rad/s]": {
+    "value": 0.5201203122964727,
+    "verdict": "pass"
+   },
+   "stand drift |v_xy| [m/s]": {
+    "value": 6.117478405748535e-05,
+    "verdict": "pass"
+   },
+   "stand drift |wz| [rad/s]": {
+    "value": 0.0021331356897971144,
+    "verdict": "pass"
+   },
+   "falls (sched/steps/stand/kick<=0.3)": {
+    "value": 1,
+    "verdict": "FAIL"
+   },
+   "falls at the 0.4 kick (report)": {
+    "value": 0,
+    "verdict": "report"
+   },
+   "stand torque max joint [N.m]": {
+    "value": 0.03706666666666667,
+    "verdict": "pass"
+   },
+   "stand torque leg sum [N.m]": {
+    "value": 0.20866666666666667,
+    "verdict": "pass"
+   },
+   "settled RMS worst [N.m]": {
+    "value": 0.19039999999999999,
+    "verdict": "pass"
+   },
+   "substep peak worst [N.m]": {
+    "value": 0.9687,
+    "verdict": "FAIL"
+   },
+   "speed_util_max (report)": {
+    "value": 0.6586944081702285,
+    "verdict": "report"
+   },
+   "speed_util_frac": {
+    "value": 0.0,
+    "verdict": "pass"
+   }
+  }
+ },
+ {
+  "checkpoint": "v2e_s7@5750 (h3, 3r)",
+  "source": "hd1910_v2e_s7_5750_eval_h3.json",
+  "replicas": 3,
+  "rows": {
+   "fwd 0.10 vx [m/s]": {
+    "value": 0.015297399972142944,
+    "verdict": "FAIL"
+   },
+   "back 0.10 vx [m/s]": {
+    "value": -0.08464043111070892,
+    "verdict": "pass"
+   },
+   "left 0.10 vy [m/s]": {
+    "value": 0.11075381817886894,
+    "verdict": "pass"
+   },
+   "step 0->0.10 t90 [s]": {
+    "value": 5.640000000000001,
+    "verdict": "FAIL"
+   },
+   "step 0->0.10 |ss_err| [m/s]": {
+    "value": 0.08026924169259196,
+    "verdict": "FAIL"
+   },
+   "step 0.20->0 t_stop [s]": {
+    "value": 0.38000000000000006,
+    "verdict": "pass"
+   },
+   "fwd 0.20 vx [m/s]": {
+    "value": 0.15995151863110685,
+    "verdict": "pass"
+   },
+   "fwd 0.30 vx [m/s]": {
+    "value": 0.17301161418972763,
+    "verdict": "pass"
+   },
+   "turn |wz| mean [rad/s]": {
+    "value": 1.1802713496512327,
+    "verdict": "pass"
+   },
+   "turn |wz| min [rad/s]": {
+    "value": 1.046942711989999,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @1.0 [rad/s]": {
+    "value": 1.024589837435414,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @0.5 [rad/s]": {
+    "value": 0.5990633975713401,
+    "verdict": "pass"
+   },
+   "stand drift |v_xy| [m/s]": {
+    "value": 0.00012911563867323915,
+    "verdict": "pass"
+   },
+   "stand drift |wz| [rad/s]": {
+    "value": 0.001632639461913151,
+    "verdict": "pass"
+   },
+   "falls (sched/steps/stand/kick<=0.3)": {
+    "value": 1,
+    "verdict": "FAIL"
+   },
+   "falls at the 0.4 kick (report)": {
+    "value": 0,
+    "verdict": "report"
+   },
+   "stand torque max joint [N.m]": {
+    "value": 0.0299,
+    "verdict": "pass"
+   },
+   "stand torque leg sum [N.m]": {
+    "value": 0.18436666666666668,
+    "verdict": "pass"
+   },
+   "settled RMS worst [N.m]": {
+    "value": 0.20163333333333333,
+    "verdict": "pass"
+   },
+   "substep peak worst [N.m]": {
+    "value": 0.8995000000000001,
+    "verdict": "warn"
+   },
+   "speed_util_max (report)": {
+    "value": 0.7097555616470267,
+    "verdict": "report"
+   },
+   "speed_util_frac": {
+    "value": 0.0,
+    "verdict": "pass"
+   }
+  }
+ },
+ {
+  "checkpoint": "v2e_s7@5999 (h3, 3r)",
+  "source": "hd1910_v2e_s7_5999_eval_h3.json",
+  "replicas": 3,
+  "rows": {
+   "fwd 0.10 vx [m/s]": {
+    "value": -0.00025830526136738874,
+    "verdict": "FAIL"
+   },
+   "back 0.10 vx [m/s]": {
+    "value": -0.06193171388840524,
+    "verdict": "pass"
+   },
+   "left 0.10 vy [m/s]": {
+    "value": 0.09045429653299715,
+    "verdict": "pass"
+   },
+   "step 0->0.10 t90 [s]": {
+    "value": null,
+    "verdict": "n/a"
+   },
+   "step 0->0.10 |ss_err| [m/s]": {
+    "value": 0.10017594414847814,
+    "verdict": "FAIL"
+   },
+   "step 0.20->0 t_stop [s]": {
+    "value": 0.5,
+    "verdict": "pass"
+   },
+   "fwd 0.20 vx [m/s]": {
+    "value": 0.1612906219221494,
+    "verdict": "pass"
+   },
+   "fwd 0.30 vx [m/s]": {
+    "value": 0.19246988226531428,
+    "verdict": "pass"
+   },
+   "turn |wz| mean [rad/s]": {
+    "value": 1.2418609727990164,
+    "verdict": "pass"
+   },
+   "turn |wz| min [rad/s]": {
+    "value": 1.1140227644967555,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @1.0 [rad/s]": {
+    "value": 1.1212311532690817,
+    "verdict": "pass"
+   },
+   "turn from rest |wz| min @0.5 [rad/s]": {
+    "value": 0.6052573917360787,
+    "verdict": "pass"
+   },
+   "stand drift |v_xy| [m/s]": {
+    "value": 0.0002057652648647258,
+    "verdict": "pass"
+   },
+   "stand drift |wz| [rad/s]": {
+    "value": 7.097254263853962e-05,
+    "verdict": "pass"
+   },
+   "falls (sched/steps/stand/kick<=0.3)": {
+    "value": 0,
+    "verdict": "pass"
+   },
+   "falls at the 0.4 kick (report)": {
+    "value": 0,
+    "verdict": "report"
+   },
+   "stand torque max joint [N.m]": {
+    "value": 0.041633333333333335,
+    "verdict": "pass"
+   },
+   "stand torque leg sum [N.m]": {
+    "value": 0.24316666666666667,
+    "verdict": "pass"
+   },
+   "settled RMS worst [N.m]": {
+    "value": 0.23840000000000003,
+    "verdict": "pass"
+   },
+   "substep peak worst [N.m]": {
+    "value": 0.8060666666666666,
+    "verdict": "warn"
+   },
+   "speed_util_max (report)": {
+    "value": 0.7171506635509891,
+    "verdict": "report"
+   },
+   "speed_util_frac": {
+    "value": 0.0,
+    "verdict": "pass"
+   }
+  }
  }
 ]

@@ -57,12 +57,13 @@ SLOW_ENVS = 0.15            # share of envs that creep (0.05-0.15 m/s, one axis)
 STAND_TORQUE_WEIGHT = -2.0
 # v2c raises it tenfold (staged, see below): at -2.0 it logged -0.03 to -0.05, ~1 %
 # of the standing reward, and bracing survived in two of v2b's three checkpoints.
-# v2e (2026-10-18) lowers the final stage to -8: under v2d's -20 both seeds lost top
-# speed from 2500 on (fwd 0.30: 0.27 -> 0.15 and 0.24 -> 0.16) while standing torque
-# fell to 0.03-0.05 N.m, well under the 0.076 gate; v2c-staged at -20 without the yaw
-# term kept 0.31. v2e branches from each v2d seed's 2500 checkpoint, so the stage
-# value is the only difference.
-STAND_TORQUE_WEIGHT_FINAL = -8.0
+# v2e (2026-10-18) tried -8 here, branched from each v2d seed's 2500 checkpoint:
+# seed 42 got part of its top speed back (fwd 0.30: 0.15 -> 0.21-0.23) but its slow
+# commands flickered dead between checkpoints; seed 7 barely gained (0.16 -> 0.19)
+# and lost forward 0.10 from 4000 as under -20. Neither seed met the pass bar, so
+# the price is not the whole cause of the speed loss; v2d's -20 stays (it is the
+# recipe of the delivered policy).
+STAND_TORQUE_WEIGHT_FINAL = -20.0
 # -- v2c: the inherited mjlab rel_forward_envs = 0.2 clamps a fifth of the commands
 # to vx >= 0.3 m/s. It shifted the vx normalizer mean to +0.04, which put +0.10 m/s
 # nearest the standing cluster and made forward the last slow axis to come back.
