@@ -204,6 +204,9 @@ class Supervisor:
 
     def run(self):
         self.log(f"supervisor pid {os.getpid()} started: {len(self.jobs)} jobs, start >= {self.a.start_mb} MB for {self.a.hold_s} s, stop < {self.a.stop_mb} MB")
+        self.state["_supervisor"] = {"status": "running", "pid": os.getpid(), "start_mb": self.a.start_mb, "stop_mb": self.a.stop_mb,
+                                     "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+        self.state_path.write_text(json.dumps(self.state, indent=1))
         for job in self.jobs:
             if self.stopping():
                 break
