@@ -124,11 +124,26 @@ YAW_FINE_TAU_S = 0.5
 #      between |v_cmd,xy| = 0.10 and 0.20 m/s.
 # Both start at iteration 2500 (reward_params_curriculum), so they can be tested as
 # branches from v2d's 2500 checkpoints. The arm comes from the HD1910_ARM environment
-# variable (v2d | C | D | CD); the default reproduces v2d exactly.
+# variable (v2d | C | D | CD | CQ, CQ below); the default reproduces v2d exactly.
 STAND_TORQUE_SETTLE_S = 1.0
 YAW_FINE_LIN_GATE = (0.10, 0.20)
 ITER3_STAGE = 2500
-ARMS = ("v2d", "C", "D", "CD")
+# -- Iteration 3b (2026-10-19): starting from a quiet stand. C s7 (as v2d s7) stopped
+# starting fwd 0.10 / turn 0.5 from a settled stand by 3500-4000 while tracking both
+# once walking: a start threshold, not a dead zone. The training env hid it. After a
+# 3 s stand, C s7@4000 stays still in 2 % / 16 % of envs as trained; with head/body
+# commands zero 9 % / 27 %; also without pushes 29 % / 83 %; also without servo/body DR
+# 36 % / 88 % (the harness). Observation noise does not matter. The head command
+# (±1.1-1.4 rad, re-drawn every 2-5 s) and pushes (every 3-6 s) jostle every training
+# robot, so the policy could lean on the jolt for its first step; on hardware, idle
+# means still. CQ = C + two data changes from ITER3_STAGE:
+#   quiet episodes: QUIET_ENVS of envs get zero head/body pose commands and no pushes;
+#   start practice: after a stand, START_SLOW_ENVS of next commands are small (creep,
+#   or turn in place with |wz| in START_TURN_RANGE), ~5 % -> ~11 % of segments.
+QUIET_ENVS = 0.25
+START_SLOW_ENVS = 0.5
+START_TURN_RANGE = (0.3, 0.6)
+ARMS = ("v2d", "C", "D", "CD", "CQ")
 ARM = os.environ.get("HD1910_ARM", "v2d")
 if ARM not in ARMS:
     raise ValueError(f"HD1910_ARM={ARM!r}: expected one of {ARMS}")
@@ -201,8 +216,9 @@ def apply_hd1910_recipe(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
 
 def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg:
     """Iteration-3 arm on an HD-1910 cfg that already has the recipe's reward terms: D
-    settle-gates stand_torque, C speed-gates the fine yaw term, both from ITER3_STAGE.
-    Stage 0 of each curriculum equals the term's own (neutral) params; "v2d" adds nothing."""
+    settle-gates stand_torque, C speed-gates the fine yaw term, CQ is C plus quiet episodes
+    and start practice, all from ITER3_STAGE. Stage 0 of each curriculum equals the term's
+    own (neutral) params; "v2d" adds nothing."""
     if arm not in ARMS:
         raise ValueError(f"arm {arm!r}: expected one of {ARMS}")
     step = ITER3_STAGE * NUM_STEPS_PER_ENV
@@ -214,13 +230,38 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
                 {"step": 0, "params": {"settle_s": 0.0}},
                 {"step": step, "params": {"settle_s": STAND_TORQUE_SETTLE_S}}]},
         )
-    if arm in ("C", "CD"):
+    if arm in ("C", "CD", "CQ"):
         cfg.rewards["track_yaw_rate_fine"].params["lin_gate"] = None
         cfg.curriculum["yaw_fine_gate"] = CurriculumTermCfg(
             func=microduck_mdp.reward_params_curriculum,
             params={"reward_name": "track_yaw_rate_fine", "stages": [
                 {"step": 0, "params": {"lin_gate": None}},
                 {"step": step, "params": {"lin_gate": YAW_FINE_LIN_GATE}}]},
+        )
+    if arm == "CQ":
+        cfg.events["quiet_envs"] = EventTermCfg(func=microduck_mdp.sample_quiet_envs, mode="reset", params={"prob": 0.0})
+        cfg.curriculum["quiet_envs_stages"] = CurriculumTermCfg(
+            func=microduck_mdp.event_params_curriculum,
+            params={"event_name": "quiet_envs", "stages": [
+                {"step": 0, "params": {"prob": 0.0}}, {"step": step, "params": {"prob": QUIET_ENVS}}]},
+        )
+        for name in ("head_pose", "body_pose"):
+            if name in cfg.commands:
+                pose = deepcopy(cfg.commands[name])
+                pose.quiet_zero = True  # inert until the stage sets quiet envs
+                cfg.commands[name] = pose
+        if "push_robot" in cfg.events:
+            push = deepcopy(cfg.events["push_robot"])
+            push.func = microduck_mdp.push_by_setting_velocity_unless_quiet
+            cfg.events["push_robot"] = push
+        twist = deepcopy(cfg.commands["twist"])
+        twist.rel_start_slow_envs = 0.0
+        twist.start_turn_range = START_TURN_RANGE
+        cfg.commands["twist"] = twist
+        cfg.curriculum["start_slow_stages"] = CurriculumTermCfg(
+            func=microduck_mdp.command_attr_curriculum,
+            params={"command_name": "twist", "attr": "rel_start_slow_envs", "stages": [
+                {"step": 0, "value": 0.0}, {"step": step, "value": START_SLOW_ENVS}]},
         )
     return cfg
 

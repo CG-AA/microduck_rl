@@ -18,6 +18,7 @@ from mjlab.tasks.velocity.mdp import observations as _velocity_obs
 from mjlab.managers.command_manager import CommandTerm
 from mjlab.managers import CommandTermCfg, RewardTermCfg
 from mjlab.managers.event_manager import requires_model_fields
+from mjlab.envs.mdp.events import push_by_setting_velocity as _push_by_setting_velocity
 from mjlab.utils.lab_api.math import matrix_from_quat, wrap_to_pi, quat_apply, quat_apply_inverse, quat_from_angle_axis
 from rsl_rl.algorithms.ppo import PPO as _PPO
 
@@ -3675,6 +3676,36 @@ def reward_params_curriculum(
     return torch.tensor([float(max(current, 0))])
 
 
+def sample_quiet_envs(env: ManagerBasedRlEnv, env_ids: torch.Tensor | None, prob: float) -> None:
+    """Reset event: mark each resetting env quiet for its episode with probability ``prob``
+    (``env._quiet_env``). Quiet envs get zero head/body pose commands (``UniformPoseCommandCfg.quiet_zero``)
+    and no pushes (``push_by_setting_velocity_unless_quiet``): the robot's idle state on hardware, head
+    still and nobody pushing, which a training robot otherwise never sees (HD-1910 iteration 3b). Reset
+    events run before the command reset, so the flag is current when the pose commands resample."""
+    if not hasattr(env, "_quiet_env"):
+        env._quiet_env = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs, device=env.device)
+    env._quiet_env[env_ids] = torch.rand(len(env_ids), device=env.device) < prob
+
+
+def push_by_setting_velocity_unless_quiet(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor | None,
+    velocity_range: dict[str, tuple[float, float]],
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> None:
+    """mjlab's push_by_setting_velocity, skipping envs marked quiet by ``sample_quiet_envs``."""
+    quiet = getattr(env, "_quiet_env", None)
+    if quiet is not None:
+        if env_ids is None:
+            env_ids = torch.arange(env.num_envs, device=env.device)
+        env_ids = env_ids[~quiet[env_ids]]
+        if len(env_ids) == 0:
+            return
+    _push_by_setting_velocity(env, env_ids, velocity_range, asset_cfg)
+
+
 def command_attr_curriculum(
     env: ManagerBasedRlEnv,
     env_ids: torch.Tensor,
@@ -4876,9 +4907,11 @@ class VelocityCommandCommandOnly(UniformVelocityCommand):
     """Like UniformVelocityCommand but only draws the command arrows (no actual velocity arrows)."""
 
     def _resample_command(self, env_ids: torch.Tensor) -> None:
+        was_standing = self.is_standing_env[env_ids].clone()
         super()._resample_command(env_ids)
         self._resample_turn_in_place(env_ids)
         self._resample_slow(env_ids)
+        self._resample_start(env_ids, was_standing)
 
     def _resample_turn_in_place(self, env_ids: torch.Tensor) -> None:
         # Turn-in-place practice: for a fraction of envs, zero the linear velocity
@@ -4919,19 +4952,51 @@ class VelocityCommandCommandOnly(UniformVelocityCommand):
             return
         r = torch.empty(len(env_ids), device=self.device)
         slow_ids = env_ids[r.uniform_(0.0, 1.0) < p]
-        if len(slow_ids) == 0:
+        self._set_creep(slow_ids)
+
+    def _set_creep(self, ids: torch.Tensor) -> None:
+        """One-axis creep: |v| in slow_speed_range, random sign, slow_lateral_frac of them sideways."""
+        n = len(ids)
+        if n == 0:
             return
-        n = len(slow_ids)
         lo, hi = self.cfg.slow_speed_range
         mag = torch.empty(n, device=self.device).uniform_(lo, hi)
         sign = torch.where(torch.empty(n, device=self.device).uniform_(0.0, 1.0) < 0.5, -1.0, 1.0)
         lateral = torch.empty(n, device=self.device).uniform_(0.0, 1.0) < self.cfg.slow_lateral_frac
         zero = torch.zeros_like(mag)
-        self.vel_command_b[slow_ids, 0] = torch.where(lateral, zero, sign * mag)
-        self.vel_command_b[slow_ids, 1] = torch.where(lateral, sign * mag, zero)
-        self.vel_command_b[slow_ids, 2] = 0.0
-        self.is_standing_env[slow_ids] = False
-        self.vel_command_w[slow_ids] = self.vel_command_b[slow_ids]
+        self.vel_command_b[ids, 0] = torch.where(lateral, zero, sign * mag)
+        self.vel_command_b[ids, 1] = torch.where(lateral, sign * mag, zero)
+        self.vel_command_b[ids, 2] = 0.0
+        self.is_standing_env[ids] = False
+        self.vel_command_w[ids] = self.vel_command_b[ids]
+
+    def _resample_start(self, env_ids: torch.Tensor, was_standing: torch.Tensor) -> None:
+        # Start practice (HD-1910 iteration 3b): an env whose last segment was a stand gets a
+        # small command next with probability rel_start_slow_envs, half one-axis creep, half
+        # turn in place with |wz| in start_turn_range. Starting from a settled stance is its own
+        # skill (the first step must be taken without momentum); the uniform mix gives it ~5 %
+        # of segments. Runs last, so it overrides the other buckets for the envs it draws.
+        p = getattr(self.cfg, "rel_start_slow_envs", 0.0)
+        if p <= 0.0:
+            return  # no RNG draw: runs without the bucket are unchanged
+        r = torch.empty(len(env_ids), device=self.device)
+        ids = env_ids[was_standing & (r.uniform_(0.0, 1.0) < p)]
+        if len(ids) == 0:
+            return
+        turn = torch.empty(len(ids), device=self.device).uniform_(0.0, 1.0) < 0.5
+        self._set_creep(ids[~turn])
+        turn_ids = ids[turn]
+        n = len(turn_ids)
+        if n == 0:
+            return
+        lo, hi = self.cfg.start_turn_range
+        mag = torch.empty(n, device=self.device).uniform_(lo, hi)
+        sign = torch.where(torch.empty(n, device=self.device).uniform_(0.0, 1.0) < 0.5, -1.0, 1.0)
+        self.vel_command_b[turn_ids, 0] = 0.0
+        self.vel_command_b[turn_ids, 1] = 0.0
+        self.vel_command_b[turn_ids, 2] = sign * mag
+        self.is_standing_env[turn_ids] = False
+        self.vel_command_w[turn_ids] = self.vel_command_b[turn_ids]
 
     def _debug_vis_impl(self, visualizer: "DebugVisualizer") -> None:
         batch = visualizer.env_idx
@@ -4979,6 +5044,10 @@ class VelocityCommandCommandOnlyCfg(UniformVelocityCommandCfg):
     slow_speed_range: tuple[float, float] = (0.05, 0.15)
     # Share of the slow envs that creep sideways (vy) rather than forward/back (vx).
     slow_lateral_frac: float = 0.25
+    # Share of envs coming out of a stand that get a small command next (creep, or turn in
+    # place with |wz| in start_turn_range); see _resample_start. 0 = disabled.
+    rel_start_slow_envs: float = 0.0
+    start_turn_range: tuple[float, float] = (0.3, 0.6)
 
     def build(self, env: ManagerBasedRlEnv) -> "VelocityCommandCommandOnly":
         return VelocityCommandCommandOnly(self, env)
@@ -5509,6 +5578,10 @@ class UniformPoseCommand(CommandTerm):
         if self.cfg.zero_command_prob > 0.0:
             zero_mask = torch.rand(n, device=self.device) < self.cfg.zero_command_prob
             self._command[env_ids[zero_mask]] = 0.0
+        if self.cfg.quiet_zero:
+            quiet = getattr(self._env, "_quiet_env", None)
+            if quiet is not None:
+                self._command[env_ids[quiet[env_ids]]] = 0.0
 
 
 @dataclass(kw_only=True)
@@ -5518,6 +5591,8 @@ class UniformPoseCommandCfg(CommandTermCfg):
     ranges: tuple[tuple[float, float], ...] = ()
     # Probability that a resample yields the exact all-zero command.
     zero_command_prob: float = 0.0
+    # Hold the command at zero for envs marked quiet by ``sample_quiet_envs``.
+    quiet_zero: bool = False
 
     def build(self, env: ManagerBasedRlEnv) -> "UniformPoseCommand":
         return UniformPoseCommand(self, env)

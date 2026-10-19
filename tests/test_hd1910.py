@@ -413,7 +413,7 @@ def test_reward_params_curriculum_switches_the_live_term():
     assert term.params == {"std": 0.35, "lin_gate": (0.1, 0.2)}
 
 
-@pytest.mark.parametrize("arm", ["v2d", "C", "D", "CD"])
+@pytest.mark.parametrize("arm", ["v2d", "C", "D", "CD", "CQ"])
 def test_iter3_arms_wire_only_their_change(arm):
     """Each arm adds exactly its curriculum, neutral before ITER3_STAGE; v2d adds nothing (the default)."""
     from mjlab.tasks.registry import load_env_cfg
@@ -423,7 +423,7 @@ def test_iter3_arms_wire_only_their_change(arm):
     assert hd1910.ARM == "v2d"  # the import default reproduces the delivered recipe
     cfg = hd1910.apply_iter3_arm(load_env_cfg("Mjlab-Velocity-Flat-MicroDuck-HD1910"), arm)
     has_d, has_c = "stand_torque_settle" in cfg.curriculum, "yaw_fine_gate" in cfg.curriculum
-    assert (has_d, has_c) == (arm in ("D", "CD"), arm in ("C", "CD"))
+    assert (has_d, has_c) == (arm in ("D", "CD"), arm in ("C", "CD", "CQ"))
     step = hd1910.ITER3_STAGE * hd1910.NUM_STEPS_PER_ENV
     if has_d:
         c = cfg.curriculum["stand_torque_settle"]
@@ -434,7 +434,114 @@ def test_iter3_arms_wire_only_their_change(arm):
         c = cfg.curriculum["yaw_fine_gate"]
         assert cfg.rewards["track_yaw_rate_fine"].params["lin_gate"] is None
         assert c.params["stages"][-1] == {"step": step, "params": {"lin_gate": (0.10, 0.20)}}
+    quiet = {"quiet_envs_stages", "start_slow_stages"}
+    if arm == "CQ":
+        assert quiet <= set(cfg.curriculum) and cfg.events["quiet_envs"].params == {"prob": 0.0}
+        assert cfg.curriculum["quiet_envs_stages"].params["stages"][-1] == {"step": step, "params": {"prob": 0.25}}
+        assert cfg.curriculum["start_slow_stages"].params["stages"][-1] == {"step": step, "value": 0.5}
+        assert cfg.commands["twist"].rel_start_slow_envs == 0.0 and cfg.commands["twist"].start_turn_range == (0.3, 0.6)
+        assert cfg.commands["head_pose"].quiet_zero and cfg.commands["body_pose"].quiet_zero
+        assert cfg.events["push_robot"].func is microduck_mdp.push_by_setting_velocity_unless_quiet
+    else:
+        assert not quiet & set(cfg.curriculum) and "quiet_envs" not in cfg.events
+        assert not cfg.commands["head_pose"].quiet_zero and cfg.commands["twist"].rel_start_slow_envs == 0.0
+        assert cfg.events["push_robot"].func is not microduck_mdp.push_by_setting_velocity_unless_quiet
     if arm == "v2d":
         assert "settle_s" not in cfg.rewards["stand_torque"].params and "lin_gate" not in cfg.rewards["track_yaw_rate_fine"].params
     xl = load_env_cfg("Mjlab-Velocity-Flat-MicroDuck")
-    assert not {"stand_torque_settle", "yaw_fine_gate"} & set(xl.curriculum)
+    assert not ({"stand_torque_settle", "yaw_fine_gate"} | quiet) & set(xl.curriculum) and "quiet_envs" not in xl.events
+    assert not xl.commands["head_pose"].quiet_zero
+
+
+# ---- iteration 3b: quiet episodes and start practice (arm CQ) ------------------------------------------
+
+def _fake_twist(n, start_share=0.0, standing=None):
+    """A VelocityCommandCommandOnly with just the state the bucket methods touch."""
+    import types
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    cmd = object.__new__(microduck_mdp.VelocityCommandCommandOnly)
+    cmd._env = types.SimpleNamespace(device="cpu", num_envs=n)
+    cmd.cfg = types.SimpleNamespace(rel_start_slow_envs=start_share, start_turn_range=(0.3, 0.6),
+                                    slow_speed_range=(0.05, 0.15), slow_lateral_frac=0.25)
+    cmd.vel_command_b = torch.full((n, 3), 9.0)
+    cmd.vel_command_w = cmd.vel_command_b.clone()
+    cmd.is_standing_env = torch.zeros(n, dtype=torch.bool) if standing is None else standing.clone()
+    return cmd
+
+
+def test_start_bucket_gives_small_commands_after_a_stand():
+    """Share 1: every env that was standing gets one-axis creep or an in-place turn in range, half each,
+    and is un-marked standing; envs that were walking keep their command. Share 0 draws nothing."""
+    n = 4000
+    was = torch.arange(n) % 2 == 0
+    cmd = _fake_twist(n, 1.0, standing=torch.ones(n, dtype=torch.bool))
+    torch.manual_seed(0)
+    cmd._resample_start(torch.arange(n), was)
+    b = cmd.vel_command_b
+    assert torch.all(b[~was] == 9.0) and torch.all(cmd.is_standing_env[~was])
+    s = b[was]
+    turn = (s[:, 0] == 0) & (s[:, 1] == 0)
+    assert 0.45 < turn.float().mean() < 0.55
+    assert torch.all((s[turn, 2].abs() >= 0.3) & (s[turn, 2].abs() <= 0.6))
+    creep = s[~turn]
+    speed = creep[:, :2].abs().max(dim=1).values
+    assert torch.all(creep[:, 2] == 0) and torch.all((creep[:, 0] == 0) | (creep[:, 1] == 0))
+    assert torch.all((speed >= 0.05) & (speed <= 0.15))
+    assert not cmd.is_standing_env[was].any() and torch.equal(cmd.vel_command_w, b)
+    off = _fake_twist(n, 0.0)
+    state = torch.get_rng_state()
+    off._resample_start(torch.arange(n), was)
+    assert torch.equal(torch.get_rng_state(), state) and torch.all(off.vel_command_b == 9.0)
+
+
+def test_slow_bucket_refactor_keeps_its_draws():
+    """_resample_slow through _set_creep draws in the original order: same seed, same commands."""
+    n = 1000
+    cmd = _fake_twist(n)
+    cmd.cfg.rel_slow_envs = 0.15
+    torch.manual_seed(3)
+    cmd._resample_slow(torch.arange(n))
+    torch.manual_seed(3)  # the pre-refactor body, inline
+    ids = torch.arange(n)[torch.empty(n).uniform_(0.0, 1.0) < 0.15]
+    k = len(ids)
+    mag = torch.empty(k).uniform_(0.05, 0.15)
+    sign = torch.where(torch.empty(k).uniform_(0.0, 1.0) < 0.5, -1.0, 1.0)
+    lateral = torch.empty(k).uniform_(0.0, 1.0) < 0.25
+    want = torch.full((n, 3), 9.0)
+    want[ids, 0] = torch.where(lateral, 0.0, sign * mag)
+    want[ids, 1] = torch.where(lateral, sign * mag, 0.0)
+    want[ids, 2] = 0.0
+    assert torch.equal(cmd.vel_command_b, want)
+
+
+def test_quiet_envs_zero_pose_commands_and_skip_pushes(monkeypatch):
+    import types
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    n = 4000
+    env = types.SimpleNamespace(num_envs=n, device="cpu")
+    torch.manual_seed(0)
+    microduck_mdp.sample_quiet_envs(env, None, prob=0.25)
+    assert 0.22 < env._quiet_env.float().mean() < 0.28
+    ids = torch.arange(0, 100)
+    microduck_mdp.sample_quiet_envs(env, ids, prob=0.0)
+    assert not env._quiet_env[:100].any()
+
+    pose = object.__new__(microduck_mdp.UniformPoseCommand)
+    pose._env = env
+    pose.cfg = types.SimpleNamespace(ranges=((0.5, 1.0), (0.5, 1.0)), zero_command_prob=0.0, quiet_zero=True)
+    pose._command = torch.zeros(n, 2)
+    pose._resample_command(torch.arange(n))
+    q = env._quiet_env
+    assert torch.all(pose._command[q] == 0) and torch.all(pose._command[~q] >= 0.5)
+    pose.cfg.quiet_zero = False
+    pose._resample_command(torch.arange(n))
+    assert torch.all(pose._command >= 0.5)
+
+    pushed = []
+    monkeypatch.setattr(microduck_mdp, "_push_by_setting_velocity", lambda e, i, v, a: pushed.append(i))
+    microduck_mdp.push_by_setting_velocity_unless_quiet(env, None, {"x": (-0.5, 0.5)})
+    assert torch.equal(pushed[-1], torch.arange(n)[~q])
+    microduck_mdp.push_by_setting_velocity_unless_quiet(env, torch.nonzero(q).flatten(), {"x": (-0.5, 0.5)})
+    assert len(pushed) == 1  # only quiet envs were due: nothing pushed
