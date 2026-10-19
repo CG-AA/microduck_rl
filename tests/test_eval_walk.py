@@ -306,3 +306,24 @@ def test_turn_from_rest_rows(ev):
     old = dict(args={"continuous": 0.29}, summary=dict(schedule=[], steps=[], push=[], push_stand=[]))
     assert {name: v for name, _, _, v in ev.gate_rows(old, old)}["turn from rest |wz| min @1.0 [rad/s]"] == "n/a"
     assert [k for k, _, _ in ev.ROLLOUTS][-1] == "turn_rest"  # appended: earlier rollouts keep their seeds
+
+
+def test_counterfactual_variants_rescale_only_their_terms():
+    """scripts/counterfactual_reward.py: C fades track_yaw_rate_fine with the linear command, D keeps
+    stand_torque only on settled steps; every other term is untouched."""
+    spec = importlib.util.spec_from_file_location("cf", REPO / "scripts" / "counterfactual_reward.py")
+    cf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cf)
+    names = ["track_linear_velocity", "track_yaw_rate_fine", "stand_torque"]
+    R = np.zeros((2, 3, 3))
+    R[:, :, 0] = 1.0
+    R[:, :, 1] = 2.0
+    R[:, :, 2] = -4.0
+    cmdn = np.array([[0.0, 0.15, 0.30]] * 2)
+    settled = np.array([[0.0, 1.0, 1.0], [1.0, 1.0, 1.0]])
+    rates, terms = cf.variant_rates(R, names, cmdn, settled)
+    np.testing.assert_allclose(rates["current"], [-1.0, -1.0, -1.0])
+    np.testing.assert_allclose(rates["C"], [-1.0, -2.0, -3.0])  # yaw term x 1, 0.5, 0
+    np.testing.assert_allclose(rates["D"], [1.0, -1.0, -1.0])  # env 0 settled only half the time
+    np.testing.assert_allclose(rates["CD"], [1.0, -2.0, -3.0])
+    assert terms["current"][0] == terms["CD"][0] == 1.0

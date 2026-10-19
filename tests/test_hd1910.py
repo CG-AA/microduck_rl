@@ -350,3 +350,91 @@ def test_track_yaw_rate_fine_ema_prices_the_dc_error_only():
     data.root_link_ang_vel_b[0, 2] = 0.9  # instantaneous (velstand default) sees the peak
     inst = microduck_mdp.track_yaw_rate_fine(env, std=0.35, command_name="twist")
     assert inst[0] == pytest.approx(math.exp(-0.16 / 0.35**2), rel=1e-3)
+
+
+# ---- iteration 3: settle-gated standing torque (D), speed-gated fine yaw term (C) -----------------------
+
+def _fake_env(cmd, n=None, step_dt=0.02):
+    import types
+    import torch
+    cmd = torch.as_tensor(cmd, dtype=torch.float32)
+    n = cmd.shape[0]
+    data = types.SimpleNamespace(root_link_ang_vel_b=torch.zeros(n, 3), actuator_force=torch.ones(n, 14))
+    return types.SimpleNamespace(step_dt=step_dt, episode_length_buf=torch.full((n,), 100),
+                                 command_manager=types.SimpleNamespace(get_command=lambda name: cmd),
+                                 scene={"robot": types.SimpleNamespace(data=data)})
+
+
+def test_yaw_fine_lin_gate_fades_with_linear_command():
+    """C: full term up to 0.10 m/s, half at 0.15, none from 0.20; None = today's term."""
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    env = _fake_env([[0.0, 0.0, 0.0], [0.15, 0.0, 0.0], [0.0, 0.30, 0.0], [0.06, 0.08, 0.0]])
+    ungated = microduck_mdp.track_yaw_rate_fine(env, std=0.35, command_name="twist")
+    gated = microduck_mdp.track_yaw_rate_fine(env, std=0.35, command_name="twist", lin_gate=(0.10, 0.20))
+    assert ungated.tolist() == pytest.approx([1.0, 1.0, 1.0, 1.0])
+    assert gated.tolist() == pytest.approx([1.0, 0.5, 0.0, 1.0])  # |(0.06, 0.08)| = 0.10
+
+
+def test_stand_torque_settle_timer():
+    """D: no charge in the first settle_s of a zero command, full charge after; the age resets on any
+    non-zero command and at episode start; settle_s=0 charges from the first step as before."""
+    import torch
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    env = _fake_env([[0.0, 0.0, 0.0], [0.2, 0.0, 0.0]])
+    full = 10.0  # ten leg actuators at 1 N.m each
+    assert microduck_mdp.joint_torques_l2_when_standing(env).tolist() == [full, 0.0]
+    charged = []
+    for k in range(60):  # 1.2 s of zero command for env 0
+        charged.append(float(microduck_mdp.joint_torques_l2_when_standing(env, settle_s=1.0)[0]))
+    assert charged[44] == 0.0 and charged[49] == full and charged[59] == full  # 0.9 s free, 1.0 s on
+    env.command_manager.get_command = lambda name: torch.tensor([[0.1, 0.0, 0.0], [0.2, 0.0, 0.0]])
+    microduck_mdp.joint_torques_l2_when_standing(env, settle_s=1.0)  # a non-zero command resets the age
+    env.command_manager.get_command = lambda name: torch.tensor([[0.0, 0.0, 0.0], [0.2, 0.0, 0.0]])
+    assert float(microduck_mdp.joint_torques_l2_when_standing(env, settle_s=1.0)[0]) == 0.0
+    for _ in range(55):
+        microduck_mdp.joint_torques_l2_when_standing(env, settle_s=1.0)
+    env.episode_length_buf = torch.tensor([1, 100])  # episode restart resets it too
+    assert float(microduck_mdp.joint_torques_l2_when_standing(env, settle_s=1.0)[0]) == 0.0
+
+
+def test_reward_params_curriculum_switches_the_live_term():
+    import types
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    term = types.SimpleNamespace(params={"std": 0.35, "lin_gate": None})
+    env = types.SimpleNamespace(common_step_counter=0, reward_manager=types.SimpleNamespace(get_term_cfg=lambda name: term))
+    stages = [{"step": 0, "params": {"lin_gate": None}}, {"step": 100, "params": {"lin_gate": (0.1, 0.2)}}]
+    microduck_mdp.reward_params_curriculum(env, None, "track_yaw_rate_fine", stages)
+    assert term.params == {"std": 0.35, "lin_gate": None}
+    env.common_step_counter = 101
+    assert int(microduck_mdp.reward_params_curriculum(env, None, "track_yaw_rate_fine", stages)) == 1
+    assert term.params == {"std": 0.35, "lin_gate": (0.1, 0.2)}
+
+
+@pytest.mark.parametrize("arm", ["v2d", "C", "D", "CD"])
+def test_iter3_arms_wire_only_their_change(arm):
+    """Each arm adds exactly its curriculum, neutral before ITER3_STAGE; v2d adds nothing (the default)."""
+    from mjlab.tasks.registry import load_env_cfg
+    from mjlab_microduck.tasks import hd1910
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    assert hd1910.ARM == "v2d"  # the import default reproduces the delivered recipe
+    cfg = hd1910.apply_iter3_arm(load_env_cfg("Mjlab-Velocity-Flat-MicroDuck-HD1910"), arm)
+    has_d, has_c = "stand_torque_settle" in cfg.curriculum, "yaw_fine_gate" in cfg.curriculum
+    assert (has_d, has_c) == (arm in ("D", "CD"), arm in ("C", "CD"))
+    step = hd1910.ITER3_STAGE * hd1910.NUM_STEPS_PER_ENV
+    if has_d:
+        c = cfg.curriculum["stand_torque_settle"]
+        assert c.func is microduck_mdp.reward_params_curriculum and cfg.rewards["stand_torque"].params["settle_s"] == 0.0
+        assert c.params["stages"] == [{"step": 0, "params": {"settle_s": 0.0}}, {"step": step, "params": {"settle_s": 1.0}}]
+        assert cfg.rewards["stand_torque"].weight == -2.0  # the weight schedule is unchanged (-20 at 2500)
+    if has_c:
+        c = cfg.curriculum["yaw_fine_gate"]
+        assert cfg.rewards["track_yaw_rate_fine"].params["lin_gate"] is None
+        assert c.params["stages"][-1] == {"step": step, "params": {"lin_gate": (0.10, 0.20)}}
+    if arm == "v2d":
+        assert "settle_s" not in cfg.rewards["stand_torque"].params and "lin_gate" not in cfg.rewards["track_yaw_rate_fine"].params
+    xl = load_env_cfg("Mjlab-Velocity-Flat-MicroDuck")
+    assert not {"stand_torque_settle", "yaw_fine_gate"} & set(xl.curriculum)

@@ -20,6 +20,7 @@ swap and then through ``make_hd1910_variant`` as well, so it gets the recipe
 (see tasks/__init__.py).
 """
 
+import os
 from copy import deepcopy
 from dataclasses import replace
 
@@ -110,6 +111,27 @@ NUM_STEPS_PER_ENV = 24  # curriculum steps are env steps: iteration x 24
 YAW_FINE_WEIGHT = 2.0
 YAW_FINE_STD = 0.35
 YAW_FINE_TAU_S = 0.5
+# -- Iteration 3 (2026-10-19): recover top speed. v2d walks 0.15 m/s at a 0.30 command.
+# Measured: under v2d's own reward an earlier, faster checkpoint scores higher at 0.30 /
+# 0.40 m/s and standing, so the reward does not want the slow gait; its margin for speed
+# is thin, and two terms thin it further:
+#   D: stand_torque bills ~3 /s per standing second in training against 0.7-0.9 /s for a
+#      settled robot: mostly the deceleration after a walk-to-stop switch and landings
+#      after reset, a tax on carrying speed. D charges it only after the command has
+#      been zero for STAND_TORQUE_SETTLE_S.
+#   C: the fine yaw term (added for turns from a standstill) also charges the yaw wobble
+#      of a fast step, which the stock angular term already prices. C fades it out
+#      between |v_cmd,xy| = 0.10 and 0.20 m/s.
+# Both start at iteration 2500 (reward_params_curriculum), so they can be tested as
+# branches from v2d's 2500 checkpoints. The arm comes from the HD1910_ARM environment
+# variable (v2d | C | D | CD); the default reproduces v2d exactly.
+STAND_TORQUE_SETTLE_S = 1.0
+YAW_FINE_LIN_GATE = (0.10, 0.20)
+ITER3_STAGE = 2500
+ARMS = ("v2d", "C", "D", "CD")
+ARM = os.environ.get("HD1910_ARM", "v2d")
+if ARM not in ARMS:
+    raise ValueError(f"HD1910_ARM={ARM!r}: expected one of {ARMS}")
 
 
 def apply_hd1910_recipe(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
@@ -173,6 +195,33 @@ def apply_hd1910_recipe(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
         params={"reward_name": "stand_torque",
                 "weight_stages": [{"step": steps(it), "weight": w} for it, w in STAND_TORQUE_STAGES]},
     )
+    apply_iter3_arm(cfg, ARM)
+    return cfg
+
+
+def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg:
+    """Iteration-3 arm on an HD-1910 cfg that already has the recipe's reward terms: D
+    settle-gates stand_torque, C speed-gates the fine yaw term, both from ITER3_STAGE.
+    Stage 0 of each curriculum equals the term's own (neutral) params; "v2d" adds nothing."""
+    if arm not in ARMS:
+        raise ValueError(f"arm {arm!r}: expected one of {ARMS}")
+    step = ITER3_STAGE * NUM_STEPS_PER_ENV
+    if arm in ("D", "CD"):
+        cfg.rewards["stand_torque"].params["settle_s"] = 0.0
+        cfg.curriculum["stand_torque_settle"] = CurriculumTermCfg(
+            func=microduck_mdp.reward_params_curriculum,
+            params={"reward_name": "stand_torque", "stages": [
+                {"step": 0, "params": {"settle_s": 0.0}},
+                {"step": step, "params": {"settle_s": STAND_TORQUE_SETTLE_S}}]},
+        )
+    if arm in ("C", "CD"):
+        cfg.rewards["track_yaw_rate_fine"].params["lin_gate"] = None
+        cfg.curriculum["yaw_fine_gate"] = CurriculumTermCfg(
+            func=microduck_mdp.reward_params_curriculum,
+            params={"reward_name": "track_yaw_rate_fine", "stages": [
+                {"step": 0, "params": {"lin_gate": None}},
+                {"step": step, "params": {"lin_gate": YAW_FINE_LIN_GATE}}]},
+        )
     return cfg
 
 

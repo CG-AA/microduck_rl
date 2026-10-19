@@ -3655,6 +3655,26 @@ def event_params_curriculum(
     return torch.tensor([float(max(current, 0))])
 
 
+def reward_params_curriculum(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    reward_name: str,
+    stages: list[dict],
+) -> torch.Tensor:
+    """Step-staged reward-term parameters, the reward twin of ``event_params_curriculum``:
+    ``stages`` = ``[{"step": int, "params": {name: value}}]`` applied in order on the live
+    RewardManager term cfg (read at call time every step). Make stage 0 equal the term's own
+    params. Returns the index of the current stage, for logging."""
+    del env_ids
+    cfg = env.reward_manager.get_term_cfg(reward_name)
+    current = -1
+    for i, stage in enumerate(stages):
+        if env.common_step_counter > stage["step"]:
+            cfg.params.update(stage["params"])
+            current = i
+    return torch.tensor([float(max(current, 0))])
+
+
 def command_attr_curriculum(
     env: ManagerBasedRlEnv,
     env_ids: torch.Tensor,
@@ -4105,6 +4125,7 @@ def joint_torques_l2_when_standing(
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
     command_name: str = "twist",
     command_threshold: float = 0.01,
+    settle_s: float = 0.0,
 ) -> torch.Tensor:
     """Penalise the leg actuators' squared torques only when the command is near zero.
 
@@ -4115,12 +4136,27 @@ def joint_torques_l2_when_standing(
     so the pose reward saw nothing and no term priced it. Torque is what heats a servo.
     Gated on the command so the gait is untaxed. Actuator indices: the 14 actuators exclude
     the passive joints on every model, legs are 0-4 and 9-13 (tests/test_joint_layout.py).
+
+    ``settle_s`` (HD-1910 iteration 3, 2026-10-19): charge only once the command has been
+    zero for at least this long, counted per env in ``env._zero_cmd_age`` (reset by any
+    non-zero command and at episode start). In training this term cost ~3 /s per standing
+    second against 0.7-0.9 /s for a robot settled in place: most of it billed the
+    deceleration after a walk-to-stop switch and the landing after a reset, which taxes
+    carrying speed, not bracing. The age depends only on the command, so it cannot be
+    gamed. 0.0 (default) = charged from the first zero-command step, as before.
     """
     asset: Entity = env.scene[asset_cfg.name]
 
     command = env.command_manager.get_command(command_name)
     total_speed = torch.norm(command[:, :2], dim=1) + torch.abs(command[:, 2])
     is_standing_cmd = (total_speed < command_threshold).float()
+    if settle_s > 0.0:
+        if not hasattr(env, "_zero_cmd_age"):
+            env._zero_cmd_age = torch.zeros_like(total_speed)
+        age = env._zero_cmd_age
+        age[(total_speed >= command_threshold) | (env.episode_length_buf <= 1)] = 0.0
+        age += float(env.step_dt) * is_standing_cmd
+        is_standing_cmd = is_standing_cmd * (age >= settle_s - 0.5 * float(env.step_dt)).float()  # float sums
 
     leg_actuators = list(range(0, 5)) + list(range(9, 14))
     tau = asset.data.actuator_force[:, leg_actuators]
@@ -5590,6 +5626,7 @@ def track_yaw_rate_fine(
     command_name: str,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
     tau_s: float | None = None,
+    lin_gate: tuple[float, float] | None = None,
 ) -> torch.Tensor:
     """Yaw-rate-only Gaussian, exp(-(wz_cmd - wz)²/std²), ADDED next to the stock
     track_angular_velocity (which stays as is).
@@ -5606,10 +5643,20 @@ def track_yaw_rate_fine(
     ``tau_s`` (HD-1910 v2d, 2026-10-18): Gaussian on an EMA of the yaw rate instead of the
     instantaneous one, as track_linear_velocity_fine does for xy: turning in place by
     stepping makes the yaw rate oscillate per step, an error the policy cannot escape;
-    the EMA prices the DC error only. None (default, velstand) = instantaneous."""
+    the EMA prices the DC error only. None (default, velstand) = instantaneous.
+
+    ``lin_gate=(lo, hi)`` (HD-1910 iteration 3, 2026-10-19): scale the term by
+    clamp((hi - |v_cmd,xy|) / (hi - lo), 0, 1): full weight for turning in place and
+    creeping, none from ``hi`` up. The term was added for turns from a standstill; at
+    walking speed it charged the yaw wobble of a fast step a second time (the stock
+    angular term already does) and thinned the reward margin for speed. None = ungated."""
     asset: Entity = env.scene[asset_cfg.name]
     cmd = env.command_manager.get_command(command_name)
     wz = asset.data.root_link_ang_vel_b[:, 2]
+    gate = None
+    if lin_gate is not None:
+        lo, hi = lin_gate
+        gate = torch.clamp((hi - torch.norm(cmd[:, :2], dim=1)) / max(hi - lo, 1e-6), 0.0, 1.0)
     if tau_s is not None:
         if not hasattr(env, "_yaw_rate_ema"):
             env._yaw_rate_ema = torch.zeros_like(wz)
@@ -5618,7 +5665,8 @@ def track_yaw_rate_fine(
         alpha = min(1.0, float(env.step_dt) / max(tau_s, 1e-6))
         env._yaw_rate_ema = (1.0 - alpha) * env._yaw_rate_ema + alpha * wz
         wz = env._yaw_rate_ema
-    return torch.exp(-torch.square(cmd[:, 2] - wz) / std**2)
+    out = torch.exp(-torch.square(cmd[:, 2] - wz) / std**2)
+    return out if gate is None else out * gate
 
 
 def track_linear_velocity_fine(
