@@ -9,7 +9,8 @@ last 4 s and the share of envs that stayed still (|response| < 20 % of the comma
   quiet    head/body pose commands zero and no pushes: the robot's idle state on hardware
 
 Found the HD-1910 iteration-3b start threshold (2026-10-19): v3C s7@4000 stays still in 2 % / 16 %
-(fwd / turn) as trained but 29 % / 83 % quiet. The env is built with HD1910_ARM=v2d whatever the
+(fwd / turn) as trained but 29 % / 83 % quiet. ``--noise`` adds training-like action noise: at the
+learned 0.2-0.3 rad it rescues every start, which is why training never saw the failure (3c). The env is built with HD1910_ARM=v2d whatever the
 caller's environment, so quiet episodes of the CQ arm do not leak into the "trained" condition.
 
 usage:
@@ -60,6 +61,7 @@ def run(policies, args):
             out[name][cond] = {}
             for cname, cmd in COMMANDS:
                 torch.manual_seed(args.seed)
+                rng = np.random.default_rng(args.seed)
                 obs, _ = env.reset()
                 vals, alive = [], np.ones(args.envs, bool)
                 for k in range(n_stand + n_cmd):
@@ -71,6 +73,8 @@ def run(policies, args):
                     if cond == "quiet":
                         o[:, 51:61] = 0.0  # head + body pose commands
                     a = sess.run(None, {inp: o})[0]
+                    if args.noise > 0:
+                        a = a + (rng.standard_normal(a.shape) * args.noise).astype(np.float32)
                     obs, _, term, trunc, _ = env.step(torch.as_tensor(a, device=env.device))
                     alive &= ~(term | trunc).cpu().numpy()
                     if k >= n_stand + n_cmd - n_measure:
@@ -95,6 +99,8 @@ def main():
     ap.add_argument("--cmd-s", type=float, default=6.0)
     ap.add_argument("--stage-iter", type=int, default=6000, help="curriculum stage to probe at (iteration)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--noise", type=float, default=0.0,
+                    help="Gaussian action noise [rad] on every joint: what training sees at that std (0 = deployed)")
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--json", help="write results here")
     args = ap.parse_args()

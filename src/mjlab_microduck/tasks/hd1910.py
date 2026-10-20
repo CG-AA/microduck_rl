@@ -124,7 +124,7 @@ YAW_FINE_TAU_S = 0.5
 #      between |v_cmd,xy| = 0.10 and 0.20 m/s.
 # Both start at iteration 2500 (reward_params_curriculum), so they can be tested as
 # branches from v2d's 2500 checkpoints. The arm comes from the HD1910_ARM environment
-# variable (v2d | C | D | CD | CQ, CQ below); the default reproduces v2d exactly.
+# variable (v2d | C | D | CD | CQ | CQN, CQ and CQN below); the default reproduces v2d exactly.
 STAND_TORQUE_SETTLE_S = 1.0
 YAW_FINE_LIN_GATE = (0.10, 0.20)
 ITER3_STAGE = 2500
@@ -143,7 +143,22 @@ ITER3_STAGE = 2500
 QUIET_ENVS = 0.25
 START_SLOW_ENVS = 0.5
 START_TURN_RANGE = (0.3, 0.6)
-ARMS = ("v2d", "C", "D", "CD", "CQ")
+# -- Iteration 3c (2026-10-20): CQ only delayed seed 7's loss (dead again from 5000), because
+# the quiet episodes were not quiet: PPO's own action noise (learned std 0.20-0.33 rad per
+# joint, state-independent, kept up by the entropy bonus) kicks a standing robot into its
+# first step. From a quiet stand, share that stays still at fwd 0.10 / turn 0.5:
+#   noise sigma   CQ s7@6000   C s7@4000
+#   0 (deployed)  90 % / 34 %  31 % / 82 %
+#   0.03          77 % / 26 %  15 % / 69 %
+#   0.06          44 % / 13 %   4 % / 45 %
+#   0.10           8 % /  5 %   1 % / 18 %
+#   trained        2 % /  0 %   2 % /  2 %
+# So PPO never trained the deterministic start. CQN = CQ + a staged noise ceiling (mdp.py
+# Patch 6) down to 0.05 rad, where the failure is visible to training, spread over 750
+# iterations because it also removes ~1.6/s of action-rate penalty (2*sum(sigma^2) ~ 1.7) +
+# pushes back for quiet robots that are moving (CQ s42 fell at the 0.3 m/s kick late).
+ACTION_STD_CAP_STAGES = [(2500, 0.15), (2750, 0.10), (3000, 0.07), (3250, 0.05)]
+ARMS = ("v2d", "C", "D", "CD", "CQ", "CQN")
 ARM = os.environ.get("HD1910_ARM", "v2d")
 if ARM not in ARMS:
     raise ValueError(f"HD1910_ARM={ARM!r}: expected one of {ARMS}")
@@ -217,7 +232,8 @@ def apply_hd1910_recipe(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
 def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg:
     """Iteration-3 arm on an HD-1910 cfg that already has the recipe's reward terms: D
     settle-gates stand_torque, C speed-gates the fine yaw term, CQ is C plus quiet episodes
-    and start practice, all from ITER3_STAGE. Stage 0 of each curriculum equals the term's
+    and start practice, CQN is CQ plus the action-noise ceiling and pushes for moving quiet
+    robots, all from ITER3_STAGE. Stage 0 of each curriculum equals the term's
     own (neutral) params; "v2d" adds nothing."""
     if arm not in ARMS:
         raise ValueError(f"arm {arm!r}: expected one of {ARMS}")
@@ -230,7 +246,7 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
                 {"step": 0, "params": {"settle_s": 0.0}},
                 {"step": step, "params": {"settle_s": STAND_TORQUE_SETTLE_S}}]},
         )
-    if arm in ("C", "CD", "CQ"):
+    if arm in ("C", "CD", "CQ", "CQN"):
         cfg.rewards["track_yaw_rate_fine"].params["lin_gate"] = None
         cfg.curriculum["yaw_fine_gate"] = CurriculumTermCfg(
             func=microduck_mdp.reward_params_curriculum,
@@ -238,7 +254,7 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
                 {"step": 0, "params": {"lin_gate": None}},
                 {"step": step, "params": {"lin_gate": YAW_FINE_LIN_GATE}}]},
         )
-    if arm == "CQ":
+    if arm in ("CQ", "CQN"):
         cfg.events["quiet_envs"] = EventTermCfg(func=microduck_mdp.sample_quiet_envs, mode="reset", params={"prob": 0.0})
         cfg.curriculum["quiet_envs_stages"] = CurriculumTermCfg(
             func=microduck_mdp.event_params_curriculum,
@@ -253,6 +269,8 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
         if "push_robot" in cfg.events:
             push = deepcopy(cfg.events["push_robot"])
             push.func = microduck_mdp.push_by_setting_velocity_unless_quiet
+            if arm == "CQN":
+                push.params["push_moving_quiet"] = True
             cfg.events["push_robot"] = push
         twist = deepcopy(cfg.commands["twist"])
         twist.rel_start_slow_envs = 0.0
@@ -262,6 +280,12 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
             func=microduck_mdp.command_attr_curriculum,
             params={"command_name": "twist", "attr": "rel_start_slow_envs", "stages": [
                 {"step": 0, "value": 0.0}, {"step": step, "value": START_SLOW_ENVS}]},
+        )
+    if arm == "CQN":
+        cfg.curriculum["action_std_cap"] = CurriculumTermCfg(
+            func=microduck_mdp.action_std_cap_curriculum,
+            params={"stages": [{"step": 0, "cap": None}] + [
+                {"step": it * NUM_STEPS_PER_ENV, "cap": cap} for it, cap in ACTION_STD_CAP_STAGES]},
         )
     return cfg
 

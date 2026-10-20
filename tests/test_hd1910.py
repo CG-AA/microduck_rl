@@ -413,7 +413,7 @@ def test_reward_params_curriculum_switches_the_live_term():
     assert term.params == {"std": 0.35, "lin_gate": (0.1, 0.2)}
 
 
-@pytest.mark.parametrize("arm", ["v2d", "C", "D", "CD", "CQ"])
+@pytest.mark.parametrize("arm", ["v2d", "C", "D", "CD", "CQ", "CQN"])
 def test_iter3_arms_wire_only_their_change(arm):
     """Each arm adds exactly its curriculum, neutral before ITER3_STAGE; v2d adds nothing (the default)."""
     from mjlab.tasks.registry import load_env_cfg
@@ -423,7 +423,7 @@ def test_iter3_arms_wire_only_their_change(arm):
     assert hd1910.ARM == "v2d"  # the import default reproduces the delivered recipe
     cfg = hd1910.apply_iter3_arm(load_env_cfg("Mjlab-Velocity-Flat-MicroDuck-HD1910"), arm)
     has_d, has_c = "stand_torque_settle" in cfg.curriculum, "yaw_fine_gate" in cfg.curriculum
-    assert (has_d, has_c) == (arm in ("D", "CD"), arm in ("C", "CD", "CQ"))
+    assert (has_d, has_c) == (arm in ("D", "CD"), arm in ("C", "CD", "CQ", "CQN"))
     step = hd1910.ITER3_STAGE * hd1910.NUM_STEPS_PER_ENV
     if has_d:
         c = cfg.curriculum["stand_torque_settle"]
@@ -435,7 +435,7 @@ def test_iter3_arms_wire_only_their_change(arm):
         assert cfg.rewards["track_yaw_rate_fine"].params["lin_gate"] is None
         assert c.params["stages"][-1] == {"step": step, "params": {"lin_gate": (0.10, 0.20)}}
     quiet = {"quiet_envs_stages", "start_slow_stages"}
-    if arm == "CQ":
+    if arm in ("CQ", "CQN"):
         assert quiet <= set(cfg.curriculum) and cfg.events["quiet_envs"].params == {"prob": 0.0}
         assert cfg.curriculum["quiet_envs_stages"].params["stages"][-1] == {"step": step, "params": {"prob": 0.25}}
         assert cfg.curriculum["start_slow_stages"].params["stages"][-1] == {"step": step, "value": 0.5}
@@ -446,10 +446,21 @@ def test_iter3_arms_wire_only_their_change(arm):
         assert not quiet & set(cfg.curriculum) and "quiet_envs" not in cfg.events
         assert not cfg.commands["head_pose"].quiet_zero and cfg.commands["twist"].rel_start_slow_envs == 0.0
         assert cfg.events["push_robot"].func is not microduck_mdp.push_by_setting_velocity_unless_quiet
+    if arm == "CQN":
+        assert cfg.events["push_robot"].params["push_moving_quiet"] is True
+        c = cfg.curriculum["action_std_cap"]
+        assert c.func is microduck_mdp.action_std_cap_curriculum
+        assert c.params["stages"][0] == {"step": 0, "cap": None}
+        assert c.params["stages"][1:] == [{"step": it * 24, "cap": cap} for it, cap in
+                                          ((2500, 0.15), (2750, 0.10), (3000, 0.07), (3250, 0.05))]
+    else:
+        assert "action_std_cap" not in cfg.curriculum
+        assert "push_moving_quiet" not in cfg.events["push_robot"].params
     if arm == "v2d":
         assert "settle_s" not in cfg.rewards["stand_torque"].params and "lin_gate" not in cfg.rewards["track_yaw_rate_fine"].params
     xl = load_env_cfg("Mjlab-Velocity-Flat-MicroDuck")
-    assert not ({"stand_torque_settle", "yaw_fine_gate"} | quiet) & set(xl.curriculum) and "quiet_envs" not in xl.events
+    assert not ({"stand_torque_settle", "yaw_fine_gate", "action_std_cap"} | quiet) & set(xl.curriculum)
+    assert "quiet_envs" not in xl.events
     assert not xl.commands["head_pose"].quiet_zero
 
 
@@ -545,3 +556,51 @@ def test_quiet_envs_zero_pose_commands_and_skip_pushes(monkeypatch):
     assert torch.equal(pushed[-1], torch.arange(n)[~q])
     microduck_mdp.push_by_setting_velocity_unless_quiet(env, torch.nonzero(q).flatten(), {"x": (-0.5, 0.5)})
     assert len(pushed) == 1  # only quiet envs were due: nothing pushed
+
+
+# ---- iteration 3c: action-noise ceiling (arm CQN) ------------------------------------------------------
+
+def test_cap_action_std_clamps_scalar_and_log_std():
+    import types
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    scalar = types.SimpleNamespace(distribution=types.SimpleNamespace(
+        std_param=torch.nn.Parameter(torch.tensor([0.30, 0.04, 0.20]))))
+    microduck_mdp.cap_action_std(scalar, 0.05)
+    assert scalar.distribution.std_param.tolist() == pytest.approx([0.05, 0.04, 0.05])
+    log = types.SimpleNamespace(distribution=types.SimpleNamespace(
+        log_std_param=torch.nn.Parameter(torch.log(torch.tensor([0.30, 0.04])))))
+    microduck_mdp.cap_action_std(log, 0.05)
+    assert torch.exp(log.distribution.log_std_param).tolist() == pytest.approx([0.05, 0.04])
+    microduck_mdp.cap_action_std(types.SimpleNamespace(distribution=None), 0.05)  # deterministic actor: no-op
+
+
+def test_action_std_cap_curriculum_sets_the_ceiling():
+    import types
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    stages = [{"step": 0, "cap": None}, {"step": 100, "cap": 0.15}, {"step": 200, "cap": 0.05}]
+    env = types.SimpleNamespace(common_step_counter=0)
+    try:
+        for step, want in ((0, None), (150, 0.15), (201, 0.05)):
+            env.common_step_counter = step
+            val = microduck_mdp.action_std_cap_curriculum(env, None, stages)
+            assert microduck_mdp.ACTION_STD_CAP["value"] == want and float(val) == pytest.approx(want or 0.0)
+    finally:
+        microduck_mdp.ACTION_STD_CAP["value"] = None
+
+
+def test_push_moving_quiet_pushes_only_moving_quiet_envs(monkeypatch):
+    import types
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    n = 4  # quiet+still, quiet+walking, quiet+turning, not quiet+still
+    data = types.SimpleNamespace(root_link_lin_vel_b=torch.tensor([[0.0, 0, 0], [0.1, 0, 0], [0.0, 0, 0], [0.0, 0, 0]]),
+                                 root_link_ang_vel_b=torch.tensor([[0.0, 0, 0], [0.0, 0, 0], [0, 0, 0.5], [0.0, 0, 0]]))
+    env = types.SimpleNamespace(num_envs=n, device="cpu", _quiet_env=torch.tensor([True, True, True, False]),
+                                scene={"robot": types.SimpleNamespace(data=data)})
+    pushed = []
+    monkeypatch.setattr(microduck_mdp, "_push_by_setting_velocity", lambda e, i, v, a: pushed.append(i.tolist()))
+    microduck_mdp.push_by_setting_velocity_unless_quiet(env, None, {"x": (-0.3, 0.3)})
+    microduck_mdp.push_by_setting_velocity_unless_quiet(env, None, {"x": (-0.3, 0.3)}, push_moving_quiet=True)
+    assert pushed == [[3], [1, 2, 3]]

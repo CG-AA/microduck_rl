@@ -68,6 +68,60 @@ _PPO.compute_returns = _safe_compute_returns
 print("[mdp] Patches 1-2 active: NaN-safe reward/advantage")
 
 # ---------------------------------------------------------------------------
+# Patch 6: action-noise ceiling. PPO acts with a learned, state-independent Gaussian
+# noise; on the HD-1910 velocity task it settled at 0.20-0.33 rad per joint (action
+# scale 1.0), which is enough to kick a standing robot into its first step. PPO then
+# never charges the deterministic (deployed) policy for failing to start from rest:
+# from a quiet stand, C s7@4000 stays still in 31 % / 82 % of envs (fwd 0.10 / turn
+# 0.5) without noise and 2 % / 2 % with it (2026-10-20). An env curriculum term
+# (``action_std_cap_curriculum``) sets the ceiling here; after every PPO update the std
+# is clamped to it, so the next rollout and the next update share one std. No term,
+# no cap: other tasks are untouched.
+# ---------------------------------------------------------------------------
+ACTION_STD_CAP: dict = {"value": None}
+
+
+def cap_action_std(actor, cap: float) -> None:
+    """Clamp the actor's Gaussian std parameter (scalar or log) to at most ``cap``."""
+    dist = getattr(actor, "distribution", None)
+    if dist is None:
+        return
+    with torch.no_grad():
+        if hasattr(dist, "std_param"):
+            dist.std_param.clamp_(max=cap)
+        elif hasattr(dist, "log_std_param"):
+            dist.log_std_param.clamp_(max=math.log(cap))
+
+
+_orig_ppo_update = _PPO.update
+
+
+def _update_with_std_cap(self) -> dict:
+    out = _orig_ppo_update(self)
+    if ACTION_STD_CAP["value"] is not None:
+        cap_action_std(self.actor, ACTION_STD_CAP["value"])
+    return out
+
+
+_PPO.update = _update_with_std_cap
+
+
+def action_std_cap_curriculum(env: ManagerBasedRlEnv, env_ids: torch.Tensor, stages: list[dict]) -> torch.Tensor:
+    """Step-staged action-noise ceiling for Patch 6: ``stages`` = ``[{"step": int, "cap": float | None}]``,
+    applied when ``common_step_counter`` passes the step (as ``command_attr_curriculum``). Returns the
+    cap for logging (0 = none)."""
+    del env_ids
+    cap = None
+    for stage in stages:
+        if env.common_step_counter > stage["step"]:
+            cap = stage["cap"]
+    ACTION_STD_CAP["value"] = cap
+    return torch.tensor([float(cap or 0.0)])
+
+
+print("[mdp] Patch 6 active: action-noise ceiling (set by action_std_cap_curriculum)")
+
+# ---------------------------------------------------------------------------
 # Patch 4: exporter_utils.get_base_metadata — the new microduck model has
 # passive joints (jaw linkage closed via equality constraints) that are part
 # of the articulation but have no XML actuator.  The upstream exporter
@@ -3694,13 +3748,22 @@ def push_by_setting_velocity_unless_quiet(
     env_ids: torch.Tensor | None,
     velocity_range: dict[str, tuple[float, float]],
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    push_moving_quiet: bool = False,
 ) -> None:
-    """mjlab's push_by_setting_velocity, skipping envs marked quiet by ``sample_quiet_envs``."""
+    """mjlab's push_by_setting_velocity, skipping envs marked quiet by ``sample_quiet_envs``. With
+    ``push_moving_quiet`` a quiet env is skipped only while still (|v_xy| < 0.05 m/s and |wz| < 0.25
+    rad/s): a standing robot, or one failing to start, stays unpushed; a walking one is pushed."""
     quiet = getattr(env, "_quiet_env", None)
     if quiet is not None:
         if env_ids is None:
             env_ids = torch.arange(env.num_envs, device=env.device)
-        env_ids = env_ids[~quiet[env_ids]]
+        skip = quiet[env_ids]
+        if push_moving_quiet:
+            data = env.scene[asset_cfg.name].data
+            still = (data.root_link_lin_vel_b[env_ids, :2].norm(dim=1) < 0.05) & \
+                    (data.root_link_ang_vel_b[env_ids, 2].abs() < 0.25)
+            skip = skip & still
+        env_ids = env_ids[~skip]
         if len(env_ids) == 0:
             return
     _push_by_setting_velocity(env, env_ids, velocity_range, asset_cfg)
