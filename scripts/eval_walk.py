@@ -554,6 +554,10 @@ def gate_rows(a, b):
         ("left 0.10 vy [m/s]", lambda d: g(d, "schedule", "left 0.10", 1), lambda x, y: y >= 0.06),
         ("step 0->0.10 t90 [s]", lambda d: _step(d, "stand -> fwd 0.10", "t90"), lambda x, y: y <= 1.5),
         ("step 0->0.10 |ss_err| [m/s]", lambda d: (lambda v: None if v is None else abs(v))(_step(d, "stand -> fwd 0.10", "ss_err")), lambda x, y: y <= 0.03),
+        # Backward and sideways starts from a stand (2026-10-20): the schedule's back/left rows follow a
+        # walk, so a policy that could not start either way from rest (hd1910 v3CQN s42) passed every row.
+        ("step 0->back 0.10 |ss_err| [m/s]", lambda d: (lambda v: None if v is None else abs(v))(_step(d, "stand -> back 0.10", "ss_err")), lambda x, y: y <= 0.03),
+        ("step 0->left 0.10 |ss_err| [m/s]", lambda d: (lambda v: None if v is None else abs(v))(_step(d, "stand -> left 0.10", "ss_err")), lambda x, y: y <= 0.03),
         ("step 0.20->0 t_stop [s]", lambda d: _step(d, "fwd 0.20 -> stand", "t_stop"), lambda x, y: y <= 1.0),
         ("fwd 0.20 vx [m/s]", lambda d: g(d, "schedule", "fwd 0.20", 0), lambda x, y: x is not None and y >= x - 0.02),
         ("fwd 0.30 vx [m/s]", lambda d: g(d, "schedule", "fwd 0.30", 0), lambda x, y: x is not None and y >= x - 0.03),

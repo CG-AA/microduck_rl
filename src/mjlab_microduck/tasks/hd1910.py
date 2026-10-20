@@ -124,7 +124,7 @@ YAW_FINE_TAU_S = 0.5
 #      between |v_cmd,xy| = 0.10 and 0.20 m/s.
 # Both start at iteration 2500 (reward_params_curriculum), so they can be tested as
 # branches from v2d's 2500 checkpoints. The arm comes from the HD1910_ARM environment
-# variable (v2d | C | D | CD | CQ | CQN, CQ and CQN below); the default reproduces v2d exactly.
+# variable (v2d | C | D | CD | CQ | CQN | CQD, the last three below); the default reproduces v2d exactly.
 STAND_TORQUE_SETTLE_S = 1.0
 YAW_FINE_LIN_GATE = (0.10, 0.20)
 ITER3_STAGE = 2500
@@ -158,7 +158,22 @@ START_TURN_RANGE = (0.3, 0.6)
 # iterations because it also removes ~1.6/s of action-rate penalty (2*sum(sigma^2) ~ 1.7) +
 # pushes back for quiet robots that are moving (CQ s42 fell at the 0.3 m/s kick late).
 ACTION_STD_CAP_STAGES = [(2500, 0.15), (2750, 0.10), (3000, 0.07), (3250, 0.05)]
-ARMS = ("v2d", "C", "D", "CD", "CQ", "CQN")
+# -- Iteration 3d (2026-10-20): CQN fixed turn starts on both seeds but not linear ones. From a
+# quiet stand, share of 512 envs that stay still at 0.10 m/s / 0.5 rad/s:
+#                  fwd  back  left  right  turnL  turnR
+#   CQN s42@6000    0    67     0    51      0      0
+#   CQN s7@5750     2    13    31     4      0      0
+#   CQ s42@6000     0     0     0     0      0      0   (no cap)
+# The harness only gated forward starts from rest. The reward prefers walking at 0.10 in every
+# direction (+1.0-1.2 /s over standing), so it is data: per linear direction quiet starts were
+# ~0.2-0.6 % of segments (turns ~0.85 %), and the cap's quick drop to 0.05 disrupted back starts
+# on both seeds (27 -> 93 %, 28 -> 79 % at 3000). CQD = CQN with quiet episodes as start drills
+# (1.5-4 s segments alternating stand and a small command in one of six directions, ~1 % of
+# segments per direction), quiet head/body poses held instead of zeroed (CQN head tracking sat at
+# the 95 % bar), and the cap stepped every 500 iterations to 0.05 at 4500.
+QUIET_DRILL_SEGMENT_S = (1.5, 4.0)
+ACTION_STD_CAP_STAGES_CQD = [(2500, 0.15), (3000, 0.12), (3500, 0.09), (4000, 0.07), (4500, 0.05)]
+ARMS = ("v2d", "C", "D", "CD", "CQ", "CQN", "CQD")
 ARM = os.environ.get("HD1910_ARM", "v2d")
 if ARM not in ARMS:
     raise ValueError(f"HD1910_ARM={ARM!r}: expected one of {ARMS}")
@@ -233,7 +248,8 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
     """Iteration-3 arm on an HD-1910 cfg that already has the recipe's reward terms: D
     settle-gates stand_torque, C speed-gates the fine yaw term, CQ is C plus quiet episodes
     and start practice, CQN is CQ plus the action-noise ceiling and pushes for moving quiet
-    robots, all from ITER3_STAGE. Stage 0 of each curriculum equals the term's
+    robots, CQD is CQN with quiet episodes as start drills, held quiet poses and a slower
+    ceiling, all from ITER3_STAGE. Stage 0 of each curriculum equals the term's
     own (neutral) params; "v2d" adds nothing."""
     if arm not in ARMS:
         raise ValueError(f"arm {arm!r}: expected one of {ARMS}")
@@ -246,7 +262,7 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
                 {"step": 0, "params": {"settle_s": 0.0}},
                 {"step": step, "params": {"settle_s": STAND_TORQUE_SETTLE_S}}]},
         )
-    if arm in ("C", "CD", "CQ", "CQN"):
+    if arm in ("C", "CD", "CQ", "CQN", "CQD"):
         cfg.rewards["track_yaw_rate_fine"].params["lin_gate"] = None
         cfg.curriculum["yaw_fine_gate"] = CurriculumTermCfg(
             func=microduck_mdp.reward_params_curriculum,
@@ -254,7 +270,7 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
                 {"step": 0, "params": {"lin_gate": None}},
                 {"step": step, "params": {"lin_gate": YAW_FINE_LIN_GATE}}]},
         )
-    if arm in ("CQ", "CQN"):
+    if arm in ("CQ", "CQN", "CQD"):
         cfg.events["quiet_envs"] = EventTermCfg(func=microduck_mdp.sample_quiet_envs, mode="reset", params={"prob": 0.0})
         cfg.curriculum["quiet_envs_stages"] = CurriculumTermCfg(
             func=microduck_mdp.event_params_curriculum,
@@ -264,28 +280,34 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
         for name in ("head_pose", "body_pose"):
             if name in cfg.commands:
                 pose = deepcopy(cfg.commands[name])
-                pose.quiet_zero = True  # inert until the stage sets quiet envs
+                if arm == "CQD":
+                    pose.quiet_hold = True  # inert until the stage sets quiet envs
+                else:
+                    pose.quiet_zero = True
                 cfg.commands[name] = pose
         if "push_robot" in cfg.events:
             push = deepcopy(cfg.events["push_robot"])
             push.func = microduck_mdp.push_by_setting_velocity_unless_quiet
-            if arm == "CQN":
+            if arm in ("CQN", "CQD"):
                 push.params["push_moving_quiet"] = True
             cfg.events["push_robot"] = push
         twist = deepcopy(cfg.commands["twist"])
         twist.rel_start_slow_envs = 0.0
         twist.start_turn_range = START_TURN_RANGE
+        if arm == "CQD":
+            twist.quiet_drill_segment_range = QUIET_DRILL_SEGMENT_S  # inert until quiet envs exist
         cfg.commands["twist"] = twist
         cfg.curriculum["start_slow_stages"] = CurriculumTermCfg(
             func=microduck_mdp.command_attr_curriculum,
             params={"command_name": "twist", "attr": "rel_start_slow_envs", "stages": [
                 {"step": 0, "value": 0.0}, {"step": step, "value": START_SLOW_ENVS}]},
         )
-    if arm == "CQN":
+    if arm in ("CQN", "CQD"):
+        stages = ACTION_STD_CAP_STAGES if arm == "CQN" else ACTION_STD_CAP_STAGES_CQD
         cfg.curriculum["action_std_cap"] = CurriculumTermCfg(
             func=microduck_mdp.action_std_cap_curriculum,
             params={"stages": [{"step": 0, "cap": None}] + [
-                {"step": it * NUM_STEPS_PER_ENV, "cap": cap} for it, cap in ACTION_STD_CAP_STAGES]},
+                {"step": it * NUM_STEPS_PER_ENV, "cap": cap} for it, cap in stages]},
         )
     return cfg
 

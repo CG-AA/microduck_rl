@@ -2,8 +2,9 @@
 
 The harness (scripts/eval_walk.py) tests one nominal robot. This runs the training env (GPU, final
 curriculum stage: servo/body randomization) with every env standing for --stand-s at zero command,
-then commanding fwd 0.10 m/s or turn 0.5 rad/s for --cmd-s, and reports the mean response over the
-last 4 s and the share of envs that stayed still (|response| < 20 % of the command). Two conditions:
+then commanding 0.10 m/s forward / back / left / right or a 0.5 rad/s turn either way for --cmd-s,
+and reports the mean response along the command over the last 4 s and the share of envs that stayed
+still (response < 20 % of the command). Two conditions:
 
   trained  the env as trained: head/body pose commands re-drawn every few seconds, pushes on
   quiet    head/body pose commands zero and no pushes: the robot's idle state on hardware
@@ -23,13 +24,21 @@ from pathlib import Path
 
 import numpy as np
 
-COMMANDS = (("fwd 0.10", (0.10, 0.0, 0.0)), ("turn 0.5", (0.0, 0.0, 0.5)))
+COMMANDS = (("fwd", (0.10, 0.0, 0.0)), ("back", (-0.10, 0.0, 0.0)), ("left", (0.0, 0.10, 0.0)),
+            ("right", (0.0, -0.10, 0.0)), ("turnL", (0.0, 0.0, 0.5)), ("turnR", (0.0, 0.0, -0.5)))
 STILL = 0.2  # stayed still: |mean response| below this fraction of the command
 MEASURE_S = 4.0
 
 
+def along(cmd):
+    """(axis, sign, magnitude) of a one-axis command: axis 0/1 = body vx/vy, 2 = yaw rate."""
+    axis = int(np.argmax(np.abs(cmd)))
+    return axis, float(np.sign(cmd[axis])), float(abs(cmd[axis]))
+
+
 def stays_still(response, command):
-    return np.abs(response) < STILL * command
+    """response measured along the command (signed), command its magnitude."""
+    return response < STILL * command
 
 
 def run(policies, args):
@@ -78,14 +87,17 @@ def run(policies, args):
                     obs, _, term, trunc, _ = env.step(torch.as_tensor(a, device=env.device))
                     alive &= ~(term | trunc).cpu().numpy()
                     if k >= n_stand + n_cmd - n_measure:
-                        v = robot.data.root_link_lin_vel_b[:, 0] if cmd[0] else robot.data.root_link_ang_vel_b[:, 2]
-                        vals.append(v.cpu().numpy())
+                        axis, sign, _ = along(cmd)
+                        v = robot.data.root_link_lin_vel_b[:, axis] if axis < 2 else robot.data.root_link_ang_vel_b[:, 2]
+                        vals.append(sign * v.cpu().numpy())
                 resp = np.mean(vals, 0)[alive]
-                mag = max(cmd)
+                mag = along(cmd)[2]
                 out[name][cond][cname] = dict(mean=float(resp.mean()), still=float(stays_still(resp, mag).mean()),
                                               fell=int((~alive).sum()))
-            print(f"{name:14s} {cond:8s} " + " | ".join(
-                f"{c}: {r['mean']:+.3f}, still {r['still']:4.0%}, fell {r['fell']}" for c, r in out[name][cond].items()), flush=True)
+            res = out[name][cond]
+            worst = max(res, key=lambda c: res[c]["still"])
+            print(f"{name:14s} {cond:8s} still: " + " ".join(f"{c} {r['still']:4.0%}" for c, r in res.items())
+                  + f" | worst {worst} {res[worst]['still']:.0%} | fell {sum(r['fell'] for r in res.values())}", flush=True)
     push["velocity_range"] = push_range
     env.close()
     return out

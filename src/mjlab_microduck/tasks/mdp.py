@@ -4975,6 +4975,7 @@ class VelocityCommandCommandOnly(UniformVelocityCommand):
         self._resample_turn_in_place(env_ids)
         self._resample_slow(env_ids)
         self._resample_start(env_ids, was_standing)
+        self._resample_drill(env_ids, was_standing)
 
     def _resample_turn_in_place(self, env_ids: torch.Tensor) -> None:
         # Turn-in-place practice: for a fraction of envs, zero the linear velocity
@@ -5061,6 +5062,41 @@ class VelocityCommandCommandOnly(UniformVelocityCommand):
         self.is_standing_env[turn_ids] = False
         self.vel_command_w[turn_ids] = self.vel_command_b[turn_ids]
 
+    def _resample_drill(self, env_ids: torch.Tensor, was_standing: torch.Tensor) -> None:
+        # Start drills (HD-1910 iteration 3d): in envs marked quiet by sample_quiet_envs, twist
+        # segments last quiet_drill_segment_range and alternate a stand with a small command drawn
+        # uniformly from six directions (creep forward / back / left / right in slow_speed_range,
+        # turn in place left / right in start_turn_range). Quiet starts were ~0.2-0.6 % of segments
+        # per linear direction and the deterministic policy kept losing them; drills make each
+        # direction ~1 %. Runs last, so it overrides every other bucket for quiet envs.
+        seg = getattr(self.cfg, "quiet_drill_segment_range", None)
+        quiet = getattr(self._env, "_quiet_env", None)
+        if seg is None or quiet is None:
+            return  # no RNG draw: runs without drills are unchanged
+        q = quiet[env_ids]
+        ids = env_ids[q]
+        if len(ids) == 0:
+            return
+        self.time_left[ids] = torch.empty(len(ids), device=self.device).uniform_(*seg)
+        stop = ids[~was_standing[q]]
+        self.vel_command_b[stop] = 0.0
+        self.vel_command_w[stop] = 0.0
+        self.is_standing_env[stop] = True
+        go = ids[was_standing[q]]
+        n = len(go)
+        if n == 0:
+            return
+        direction = torch.randint(0, 6, (n,), device=self.device)  # fwd, back, left, right, turn L, turn R
+        lin = torch.empty(n, device=self.device).uniform_(*self.cfg.slow_speed_range)
+        yaw = torch.empty(n, device=self.device).uniform_(*self.cfg.start_turn_range)
+        cmd = torch.zeros(n, 3, device=self.device)
+        cmd[:, 0] = torch.where(direction == 0, lin, torch.where(direction == 1, -lin, 0.0))
+        cmd[:, 1] = torch.where(direction == 2, lin, torch.where(direction == 3, -lin, 0.0))
+        cmd[:, 2] = torch.where(direction == 4, yaw, torch.where(direction == 5, -yaw, 0.0))
+        self.vel_command_b[go] = cmd
+        self.vel_command_w[go] = cmd
+        self.is_standing_env[go] = False
+
     def _debug_vis_impl(self, visualizer: "DebugVisualizer") -> None:
         batch = visualizer.env_idx
         if batch >= self.num_envs:
@@ -5111,6 +5147,8 @@ class VelocityCommandCommandOnlyCfg(UniformVelocityCommandCfg):
     # place with |wz| in start_turn_range); see _resample_start. 0 = disabled.
     rel_start_slow_envs: float = 0.0
     start_turn_range: tuple[float, float] = (0.3, 0.6)
+    # Segment length [s] of the start drills run by quiet envs; see _resample_drill. None = off.
+    quiet_drill_segment_range: tuple[float, float] | None = None
 
     def build(self, env: ManagerBasedRlEnv) -> "VelocityCommandCommandOnly":
         return VelocityCommandCommandOnly(self, env)
@@ -5630,6 +5668,7 @@ class UniformPoseCommand(CommandTerm):
         n = len(env_ids)
         if n == 0:
             return
+        prev = self._command[env_ids].clone() if getattr(self.cfg, "quiet_hold", False) else None
         r = torch.empty(n, device=self.device)
         for i, (lo, hi) in enumerate(self.cfg.ranges):
             self._command[env_ids, i] = r.uniform_(lo, hi)
@@ -5645,6 +5684,13 @@ class UniformPoseCommand(CommandTerm):
             quiet = getattr(self._env, "_quiet_env", None)
             if quiet is not None:
                 self._command[env_ids[quiet[env_ids]]] = 0.0
+        if prev is not None:
+            # Quiet envs keep the pose drawn at their episode's first resample. The command counter
+            # is zeroed by CommandTerm.reset just before it (episode_length_buf is reset later).
+            quiet = getattr(self._env, "_quiet_env", None)
+            if quiet is not None:
+                hold = quiet[env_ids] & (self.command_counter[env_ids] > 0)
+                self._command[env_ids[hold]] = prev[hold]
 
 
 @dataclass(kw_only=True)
@@ -5656,6 +5702,8 @@ class UniformPoseCommandCfg(CommandTermCfg):
     zero_command_prob: float = 0.0
     # Hold the command at zero for envs marked quiet by ``sample_quiet_envs``.
     quiet_zero: bool = False
+    # Hold, for quiet envs, the command drawn at episode start for the whole episode.
+    quiet_hold: bool = False
 
     def build(self, env: ManagerBasedRlEnv) -> "UniformPoseCommand":
         return UniformPoseCommand(self, env)

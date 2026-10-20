@@ -34,3 +34,11 @@ def test_mem_available_reads_meminfo(tmp_path):
     f = tmp_path / "meminfo"
     f.write_text("MemTotal:       14680064 kB\nMemFree:  1000 kB\nMemAvailable:    7340032 kB\n")
     assert tq.mem_available_mb(str(f)) == 7168
+
+
+def test_fresh_job_starts_from_scratch_and_lands_on_the_target():
+    job = {"task": "Mjlab-Velocity-Flat-MicroDuck-HD1910", "seed": 123, "run_name": "hd1910_v3CQD_s123", "target_iter": 6000,
+           "fresh": True}
+    cmd = tq.train_command(job, None, -1, 50)
+    assert "--agent.resume" not in cmd and "--agent.load-run" not in cmd
+    assert cmd[cmd.index("--agent.max-iterations") + 1] == "6001"  # iterations 0..6000, last saved as model_6000

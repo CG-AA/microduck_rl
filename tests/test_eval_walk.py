@@ -327,3 +327,16 @@ def test_counterfactual_variants_rescale_only_their_terms():
     np.testing.assert_allclose(rates["D"], [1.0, -1.0, -1.0])  # env 0 settled only half the time
     np.testing.assert_allclose(rates["CD"], [1.0, -2.0, -3.0])
     assert terms["current"][0] == terms["CD"][0] == 1.0
+
+
+def test_backward_and_sideways_starts_are_gated(ev):
+    """Harness gate rows for starts from a stand in every linear direction: a policy that cannot start
+    backward (|ss_err| 0.10) fails, one that starts passes."""
+    step = lambda name, err: dict(step=name, ss_err=err, t90=0.8, t_stop=0.4)
+    good = [step("stand -> fwd 0.10", 0.005), step("stand -> back 0.10", -0.004), step("stand -> left 0.10", 0.006)]
+    bad = [step("stand -> fwd 0.10", 0.005), step("stand -> back 0.10", -0.100), step("stand -> left 0.10", 0.006)]
+    mk = lambda steps: dict(args={"continuous": 0.29}, summary=dict(schedule=[], steps=[], push=[], push_stand=[], steps_metrics=steps))
+    by_good = {name: v for name, _, _, v in ev.gate_rows(mk(good), mk(good))}
+    by_bad = {name: v for name, _, _, v in ev.gate_rows(mk(good), mk(bad))}
+    assert by_good["step 0->back 0.10 |ss_err| [m/s]"] == "pass" and by_good["step 0->left 0.10 |ss_err| [m/s]"] == "pass"
+    assert by_bad["step 0->back 0.10 |ss_err| [m/s]"] == "FAIL" and by_bad["step 0->0.10 |ss_err| [m/s]"] == "pass"

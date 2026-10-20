@@ -17,7 +17,8 @@ runs a list of jobs one at a time and, for each:
     --max-failures crashes that were not its own stops.
 
 Jobs are a JSON list of {"name", "task", "run_name", "seed", "target_iter", "init": {"load_run",
-"checkpoint"}, "env": {...}, "args": [...]}. State and logs go next to the job file (<jobs>.state.json,
+"checkpoint"}, "env": {...}, "args": [...]}; a job with "fresh": true and no init starts from scratch
+(and resumes from its own newest checkpoint after a stop). State and logs go next to the job file (<jobs>.state.json,
 <jobs>.<name>.log, <jobs>.supervisor.log). Create the file <jobs>.STOP to make the supervisor stop the
 current job and exit. Pure standard library; meant to be started detached:
 
@@ -62,11 +63,15 @@ def latest_checkpoint(run_name, log_root=LOG_ROOT, init=None):
 
 def train_command(job, load_run, it, save_interval):
     """rsl_rl trains `max_iterations` iterations from the loaded one and saves the last as
-    model_{start + max_iterations - 1}, so this lands exactly on target_iter."""
+    model_{start + max_iterations - 1}, so this lands exactly on target_iter. load_run None starts a
+    fresh run (iterations 0 .. target_iter)."""
+    base = ["uv", "run", "train", job["task"], "--env.scene.num-envs", str(job.get("num_envs", 4096)),
+            "--agent.logger", "tensorboard", "--agent.seed", str(job["seed"]), "--agent.run-name", job["run_name"]]
+    if load_run is None:
+        return [*base, "--agent.max-iterations", str(job["target_iter"] + 1), "--agent.save-interval", str(save_interval),
+                *job.get("args", [])]
     n = job["target_iter"] - it + 1
-    return ["uv", "run", "train", job["task"], "--env.scene.num-envs", str(job.get("num_envs", 4096)),
-            "--agent.logger", "tensorboard", "--agent.seed", str(job["seed"]), "--agent.run-name", job["run_name"],
-            "--agent.resume", "True", "--agent.load-run", load_run, "--agent.load-checkpoint", f"model_{it}.pt",
+    return [*base, "--agent.resume", "True", "--agent.load-run", load_run, "--agent.load-checkpoint", f"model_{it}.pt",
             "--agent.max-iterations", str(n), "--agent.save-interval", str(save_interval), *job.get("args", [])]
 
 
@@ -149,11 +154,11 @@ class Supervisor:
         name, failures, hold, mem_stops = job["name"], 0, self.a.hold_s, []
         while not self.stopping():
             ckpt = latest_checkpoint(job["run_name"], init=job.get("init"))
-            if ckpt is None:
+            if ckpt is None and not job.get("fresh"):
                 self.log(f"{name}: no checkpoint to start from")
                 self.save(name, status="failed: no starting checkpoint")
                 return
-            run_dir, it = ckpt
+            run_dir, it = ckpt if ckpt is not None else (None, -1)
             if it >= job["target_iter"]:
                 self.log(f"{name}: done (model_{it}.pt in {run_dir})")
                 self.save(name, status="done", last_ckpt=f"{run_dir}/model_{it}.pt")
@@ -163,9 +168,10 @@ class Supervisor:
             cmd = train_command(job, run_dir, it, self.a.save_interval)
             env = {**os.environ, **{k: str(v) for k, v in job.get("env", {}).items()}}
             joblog = self.path.with_suffix(f".{name}.log")
-            self.log(f"{name}: launching from {run_dir}/model_{it}.pt to {job['target_iter']} ({mem_available_mb()} MB available)")
+            start = "scratch" if run_dir is None else f"{run_dir}/model_{it}.pt"
+            self.log(f"{name}: launching from {start} to {job['target_iter']} ({mem_available_mb()} MB available)")
             launches = self.state.get(name, {}).get("launches", 0) + 1
-            self.save(name, status="running", from_ckpt=f"{run_dir}/model_{it}.pt", launches=launches)
+            self.save(name, status="running", from_ckpt=start, launches=launches)
             with open(joblog, "a") as lf:
                 lf.write(f"\n===== launch {launches} {time.strftime('%Y-%m-%d %H:%M:%S')}: {' '.join(cmd)}\n")
                 lf.flush()

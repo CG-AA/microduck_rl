@@ -413,7 +413,7 @@ def test_reward_params_curriculum_switches_the_live_term():
     assert term.params == {"std": 0.35, "lin_gate": (0.1, 0.2)}
 
 
-@pytest.mark.parametrize("arm", ["v2d", "C", "D", "CD", "CQ", "CQN"])
+@pytest.mark.parametrize("arm", ["v2d", "C", "D", "CD", "CQ", "CQN", "CQD"])
 def test_iter3_arms_wire_only_their_change(arm):
     """Each arm adds exactly its curriculum, neutral before ITER3_STAGE; v2d adds nothing (the default)."""
     from mjlab.tasks.registry import load_env_cfg
@@ -423,7 +423,7 @@ def test_iter3_arms_wire_only_their_change(arm):
     assert hd1910.ARM == "v2d"  # the import default reproduces the delivered recipe
     cfg = hd1910.apply_iter3_arm(load_env_cfg("Mjlab-Velocity-Flat-MicroDuck-HD1910"), arm)
     has_d, has_c = "stand_torque_settle" in cfg.curriculum, "yaw_fine_gate" in cfg.curriculum
-    assert (has_d, has_c) == (arm in ("D", "CD"), arm in ("C", "CD", "CQ", "CQN"))
+    assert (has_d, has_c) == (arm in ("D", "CD"), arm in ("C", "CD", "CQ", "CQN", "CQD"))
     step = hd1910.ITER3_STAGE * hd1910.NUM_STEPS_PER_ENV
     if has_d:
         c = cfg.curriculum["stand_torque_settle"]
@@ -435,24 +435,29 @@ def test_iter3_arms_wire_only_their_change(arm):
         assert cfg.rewards["track_yaw_rate_fine"].params["lin_gate"] is None
         assert c.params["stages"][-1] == {"step": step, "params": {"lin_gate": (0.10, 0.20)}}
     quiet = {"quiet_envs_stages", "start_slow_stages"}
-    if arm in ("CQ", "CQN"):
+    if arm in ("CQ", "CQN", "CQD"):
         assert quiet <= set(cfg.curriculum) and cfg.events["quiet_envs"].params == {"prob": 0.0}
         assert cfg.curriculum["quiet_envs_stages"].params["stages"][-1] == {"step": step, "params": {"prob": 0.25}}
         assert cfg.curriculum["start_slow_stages"].params["stages"][-1] == {"step": step, "value": 0.5}
         assert cfg.commands["twist"].rel_start_slow_envs == 0.0 and cfg.commands["twist"].start_turn_range == (0.3, 0.6)
-        assert cfg.commands["head_pose"].quiet_zero and cfg.commands["body_pose"].quiet_zero
+        held = arm == "CQD"  # CQD holds the quiet poses, CQ/CQN zero them
+        for name in ("head_pose", "body_pose"):
+            assert (cfg.commands[name].quiet_zero, cfg.commands[name].quiet_hold) == (not held, held)
+        assert cfg.commands["twist"].quiet_drill_segment_range == ((1.5, 4.0) if held else None)
         assert cfg.events["push_robot"].func is microduck_mdp.push_by_setting_velocity_unless_quiet
     else:
         assert not quiet & set(cfg.curriculum) and "quiet_envs" not in cfg.events
         assert not cfg.commands["head_pose"].quiet_zero and cfg.commands["twist"].rel_start_slow_envs == 0.0
+        assert not cfg.commands["head_pose"].quiet_hold and cfg.commands["twist"].quiet_drill_segment_range is None
         assert cfg.events["push_robot"].func is not microduck_mdp.push_by_setting_velocity_unless_quiet
-    if arm == "CQN":
+    if arm in ("CQN", "CQD"):
         assert cfg.events["push_robot"].params["push_moving_quiet"] is True
         c = cfg.curriculum["action_std_cap"]
         assert c.func is microduck_mdp.action_std_cap_curriculum
         assert c.params["stages"][0] == {"step": 0, "cap": None}
-        assert c.params["stages"][1:] == [{"step": it * 24, "cap": cap} for it, cap in
-                                          ((2500, 0.15), (2750, 0.10), (3000, 0.07), (3250, 0.05))]
+        caps = (((2500, 0.15), (2750, 0.10), (3000, 0.07), (3250, 0.05)) if arm == "CQN" else
+                ((2500, 0.15), (3000, 0.12), (3500, 0.09), (4000, 0.07), (4500, 0.05)))
+        assert c.params["stages"][1:] == [{"step": it * 24, "cap": cap} for it, cap in caps]
     else:
         assert "action_std_cap" not in cfg.curriculum
         assert "push_moving_quiet" not in cfg.events["push_robot"].params
@@ -461,7 +466,7 @@ def test_iter3_arms_wire_only_their_change(arm):
     xl = load_env_cfg("Mjlab-Velocity-Flat-MicroDuck")
     assert not ({"stand_torque_settle", "yaw_fine_gate", "action_std_cap"} | quiet) & set(xl.curriculum)
     assert "quiet_envs" not in xl.events
-    assert not xl.commands["head_pose"].quiet_zero
+    assert not xl.commands["head_pose"].quiet_zero and not xl.commands["head_pose"].quiet_hold
 
 
 # ---- iteration 3b: quiet episodes and start practice (arm CQ) ------------------------------------------
@@ -604,3 +609,66 @@ def test_push_moving_quiet_pushes_only_moving_quiet_envs(monkeypatch):
     microduck_mdp.push_by_setting_velocity_unless_quiet(env, None, {"x": (-0.3, 0.3)})
     microduck_mdp.push_by_setting_velocity_unless_quiet(env, None, {"x": (-0.3, 0.3)}, push_moving_quiet=True)
     assert pushed == [[3], [1, 2, 3]]
+
+
+# ---- iteration 3d: start drills in every direction (arm CQD) -------------------------------------------
+
+def test_quiet_drill_alternates_stand_and_small_commands_in_six_directions():
+    """Quiet envs: segments in the drill range; those that were standing get a small command in one of six
+    directions (about 1/6 each), those that were walking stand; non-quiet envs are untouched; off = no draw."""
+    import types
+    n = 6000
+    cmd = _fake_twist(n)
+    cmd.cfg.quiet_drill_segment_range = (1.5, 4.0)
+    cmd.time_left = torch.full((n,), 99.0)
+    quiet = torch.arange(n) % 3 != 0  # two thirds quiet
+    cmd._env._quiet_env = quiet
+    was = torch.arange(n) % 2 == 0
+    torch.manual_seed(0)
+    cmd._resample_drill(torch.arange(n), was)
+    b = cmd.vel_command_b
+    assert torch.all(b[~quiet] == 9.0) and torch.all(cmd.time_left[~quiet] == 99.0)
+    t = cmd.time_left[quiet]
+    assert torch.all((t >= 1.5) & (t <= 4.0))
+    stop = quiet & ~was
+    assert torch.all(b[stop] == 0) and torch.all(cmd.is_standing_env[stop])
+    go = b[quiet & was]
+    assert not cmd.is_standing_env[quiet & was].any() and torch.all((go != 0).sum(dim=1) == 1)  # one axis each
+    lin, yaw = go[:, :2].abs().sum(dim=1), go[:, 2].abs()
+    assert torch.all((lin == 0) | ((lin >= 0.05) & (lin <= 0.15))) and torch.all((yaw == 0) | ((yaw >= 0.3) & (yaw <= 0.6)))
+    shares = torch.stack([(go[:, 0] > 0), (go[:, 0] < 0), (go[:, 1] > 0), (go[:, 1] < 0), (go[:, 2] > 0), (go[:, 2] < 0)]).float().mean(dim=1)
+    assert torch.all((shares > 0.13) & (shares < 0.20)), shares
+    assert torch.equal(cmd.vel_command_w[quiet], b[quiet])
+    off = _fake_twist(n)  # no drill range: nothing drawn
+    off._env._quiet_env = quiet
+    off.time_left = torch.full((n,), 99.0)
+    state = torch.get_rng_state()
+    off._resample_drill(torch.arange(n), was)
+    assert torch.equal(torch.get_rng_state(), state) and torch.all(off.vel_command_b == 9.0)
+
+
+def test_quiet_hold_keeps_the_episode_pose():
+    """quiet_hold: a quiet env keeps the pose drawn at its episode's first resample (command_counter 0);
+    later resamples leave it; non-quiet envs redraw every time."""
+    import types
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    n = 1000
+    env = types.SimpleNamespace(num_envs=n, device="cpu", _quiet_env=torch.arange(n) % 2 == 0)
+    pose = object.__new__(microduck_mdp.UniformPoseCommand)
+    pose._env = env
+    pose.cfg = types.SimpleNamespace(ranges=((-1.0, 1.0), (-1.0, 1.0)), zero_command_prob=0.0, quiet_zero=False, quiet_hold=True)
+    pose._command = torch.zeros(n, 2)
+    pose.command_counter = torch.zeros(n, dtype=torch.long)
+    ids = torch.arange(n)
+    pose._resample_command(ids)  # episode start: everyone draws
+    first = pose._command.clone()
+    assert (first.abs().sum(dim=1) > 0).all()
+    pose.command_counter[:] = 1
+    pose._resample_command(ids)
+    q = env._quiet_env
+    assert torch.equal(pose._command[q], first[q]) and not torch.equal(pose._command[~q], first[~q])
+    pose.command_counter[:] = 0  # next episode: quiet envs redraw
+    pose._resample_command(ids)
+    assert not torch.equal(pose._command[q], first[q])
+
