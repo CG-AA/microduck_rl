@@ -5931,10 +5931,14 @@ def track_angular_velocity_smooth(
     std: float,
     command_name: str,
     tau_s: float | None = None,
+    smooth_yaw: bool = True,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
     """mjlab's track_angular_velocity, exp(-((cmd_wz - w_z)² + w_x² + w_y²)/std²); with tau_s, scored on
-    a per-env EMA of the body angular velocity.
+    a per-env EMA of the body angular velocity. smooth_yaw=False keeps the yaw error on the instant
+    rate and smooths only w_x, w_y (the rocking): with the whole term on the EMA (arm CQS) nothing priced
+    a jerky or overshooting yaw rate any more, and CQS s7 turned at -1.28 to -1.35 rad/s for a -1.0
+    command with hip-yaw torque peaks rising to 1.12 N.m (stall 1.22) by 6000.
 
     Why (HD-1910 iteration 3e): the instant w_x² + w_y² bills the trunk rocking of every stride, ~1 /s
     while walking, the largest single reason the reward preferred standing to creeping (-8.6 reward*s
@@ -5942,8 +5946,10 @@ def track_angular_velocity_smooth(
     or pitch rate (a fall in progress) is still priced; dropping w_xy outright scored slightly worse."""
     asset: Entity = env.scene[asset_cfg.name]
     command = env.command_manager.get_command(command_name)
-    w = _smoothed(env, "_ang_ema", asset.data.root_link_ang_vel_b, tau_s)
-    err = torch.square(command[:, 2] - w[:, 2]) + torch.sum(torch.square(w[:, :2]), dim=1)
+    w_inst = asset.data.root_link_ang_vel_b
+    w = _smoothed(env, "_ang_ema", w_inst, tau_s)
+    wz = w[:, 2] if smooth_yaw else w_inst[:, 2]
+    err = torch.square(command[:, 2] - wz) + torch.sum(torch.square(w[:, :2]), dim=1)
     return torch.exp(-err / std**2)
 
 

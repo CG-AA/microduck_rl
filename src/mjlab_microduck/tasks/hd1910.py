@@ -124,7 +124,7 @@ YAW_FINE_TAU_S = 0.5
 #      between |v_cmd,xy| = 0.10 and 0.20 m/s.
 # Both start at iteration 2500 (reward_params_curriculum), so they can be tested as
 # branches from v2d's 2500 checkpoints. The arm comes from the HD1910_ARM environment
-# variable (v2d | C | D | CD | CQ | CQN | CQD | CQS, the last four below); the default reproduces v2d exactly.
+# variable (v2d | C | D | CD | CQ | CQN | CQD | CQS | CQR, the last five below); the default reproduces v2d exactly.
 STAND_TORQUE_SETTLE_S = 1.0
 YAW_FINE_LIN_GATE = (0.10, 0.20)
 ITER3_STAGE = 2500
@@ -187,7 +187,12 @@ ACTION_STD_CAP_STAGES_CQD = [(2500, 0.15), (3000, 0.12), (3500, 0.09), (4000, 0.
 # 9 s, back and left alike. CQS = CQN (cap, quiet episodes, start practice, normal segments) + held
 # quiet poses + the two stock terms on that EMA, from ITER3_STAGE.
 STOCK_TRACK_TAU_S = 0.5
-ARMS = ("v2d", "C", "D", "CD", "CQ", "CQN", "CQD", "CQS")
+# -- CQR (2026-10-21): CQS fixed seed 7's starts in all six directions (0-1 % stay still at every
+# checkpoint 4500-6000) but, with the whole angular term on the EMA, nothing priced a jerky or
+# overshooting yaw rate: CQS s7 turned in place at -1.28 to -1.35 rad/s for -1.0, hip-yaw substep
+# torque peaks 0.88 -> 0.99 -> 1.12 N.m at 4000 / 5750 / 6000 (stall 1.22; CQN s7 0.83-0.85). CQR =
+# CQS with the angular term's yaw error on the instant rate again and only w_x, w_y smoothed.
+ARMS = ("v2d", "C", "D", "CD", "CQ", "CQN", "CQD", "CQS", "CQR")
 ARM = os.environ.get("HD1910_ARM", "v2d")
 if ARM not in ARMS:
     raise ValueError(f"HD1910_ARM={ARM!r}: expected one of {ARMS}")
@@ -263,8 +268,8 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
     settle-gates stand_torque, C speed-gates the fine yaw term, CQ is C plus quiet episodes
     and start practice, CQN is CQ plus the action-noise ceiling and pushes for moving quiet
     robots, CQD is CQN with quiet episodes as start drills, held quiet poses and a slower
-    ceiling, CQS is CQN with held quiet poses and the stock tracking terms on an EMA, all
-    from ITER3_STAGE. Stage 0 of each curriculum equals the term's
+    ceiling, CQS is CQN with held quiet poses and the stock tracking terms on an EMA, CQR is CQS
+    with the yaw error on the instant rate, all from ITER3_STAGE. Stage 0 of each curriculum equals the term's
     own (neutral) params; "v2d" adds nothing."""
     if arm not in ARMS:
         raise ValueError(f"arm {arm!r}: expected one of {ARMS}")
@@ -277,7 +282,7 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
                 {"step": 0, "params": {"settle_s": 0.0}},
                 {"step": step, "params": {"settle_s": STAND_TORQUE_SETTLE_S}}]},
         )
-    if arm in ("C", "CD", "CQ", "CQN", "CQD", "CQS"):
+    if arm in ("C", "CD", "CQ", "CQN", "CQD", "CQS", "CQR"):
         cfg.rewards["track_yaw_rate_fine"].params["lin_gate"] = None
         cfg.curriculum["yaw_fine_gate"] = CurriculumTermCfg(
             func=microduck_mdp.reward_params_curriculum,
@@ -285,7 +290,7 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
                 {"step": 0, "params": {"lin_gate": None}},
                 {"step": step, "params": {"lin_gate": YAW_FINE_LIN_GATE}}]},
         )
-    if arm in ("CQ", "CQN", "CQD", "CQS"):
+    if arm in ("CQ", "CQN", "CQD", "CQS", "CQR"):
         cfg.events["quiet_envs"] = EventTermCfg(func=microduck_mdp.sample_quiet_envs, mode="reset", params={"prob": 0.0})
         cfg.curriculum["quiet_envs_stages"] = CurriculumTermCfg(
             func=microduck_mdp.event_params_curriculum,
@@ -295,7 +300,7 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
         for name in ("head_pose", "body_pose"):
             if name in cfg.commands:
                 pose = deepcopy(cfg.commands[name])
-                if arm in ("CQD", "CQS"):
+                if arm in ("CQD", "CQS", "CQR"):
                     pose.quiet_hold = True  # inert until the stage sets quiet envs
                 else:
                     pose.quiet_zero = True
@@ -303,7 +308,7 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
         if "push_robot" in cfg.events:
             push = deepcopy(cfg.events["push_robot"])
             push.func = microduck_mdp.push_by_setting_velocity_unless_quiet
-            if arm in ("CQN", "CQD", "CQS"):
+            if arm in ("CQN", "CQD", "CQS", "CQR"):
                 push.params["push_moving_quiet"] = True
             cfg.events["push_robot"] = push
         twist = deepcopy(cfg.commands["twist"])
@@ -317,19 +322,21 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
             params={"command_name": "twist", "attr": "rel_start_slow_envs", "stages": [
                 {"step": 0, "value": 0.0}, {"step": step, "value": START_SLOW_ENVS}]},
         )
-    if arm in ("CQN", "CQD", "CQS"):
+    if arm in ("CQN", "CQD", "CQS", "CQR"):
         stages = ACTION_STD_CAP_STAGES_CQD if arm == "CQD" else ACTION_STD_CAP_STAGES
         cfg.curriculum["action_std_cap"] = CurriculumTermCfg(
             func=microduck_mdp.action_std_cap_curriculum,
             params={"stages": [{"step": 0, "cap": None}] + [
                 {"step": it * NUM_STEPS_PER_ENV, "cap": cap} for it, cap in stages]},
         )
-    if arm == "CQS":
+    if arm in ("CQS", "CQR"):
         for name, func in (("track_linear_velocity", microduck_mdp.track_linear_velocity_smooth),
                            ("track_angular_velocity", microduck_mdp.track_angular_velocity_smooth)):
             term = deepcopy(cfg.rewards[name])
             term.func = func  # tau_s None = the stock term, bit for bit
             term.params["tau_s"] = None
+            if arm == "CQR" and name == "track_angular_velocity":
+                term.params["smooth_yaw"] = False  # yaw error on the instant rate, rocking on the EMA
             cfg.rewards[name] = term
             cfg.curriculum[f"{name}_smooth"] = CurriculumTermCfg(
                 func=microduck_mdp.reward_params_curriculum,
