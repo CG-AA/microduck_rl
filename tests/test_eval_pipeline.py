@@ -33,3 +33,8 @@ def test_final_verdict_counts_neighbours_and_needs_the_extras():
     items[5000] = _item(fails=["fwd 0.10 vx"])
     v, why = ep.final_verdict(items, final, 5500, {"sens_fails": 2, "contract": True})
     assert v == "FAIL" and why == ["gated rows pass at 2 of 4"]
+
+
+def test_candidates_are_ranked_by_step_error():
+    items = {5000: _item(ss=0.10), 5500: _item(ss=0.12), 5750: _item(ss=0.08), 6000: _item(ss=0.06, worst=0.5)}
+    assert ep.rank_candidates(items, {5000: 0.97, 5500: 0.97, 5750: 0.97, 6000: 0.99}) == [5750, 5000, 5500]

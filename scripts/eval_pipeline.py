@@ -68,10 +68,15 @@ def qualifies(item):
             and v("stand torque max joint [N.m]", 9.0) <= 0.07)
 
 
-def choose_candidate(items, head):
-    """items {it: item}; head {it: ratio to the reference}. Qualifying + head >= 95 %, then smallest step error."""
+def rank_candidates(items, head):
+    """items {it: item}; head {it: ratio to the reference}. Qualifying + head >= 95 %, by smallest step error."""
     ok = [it for it, x in items.items() if qualifies(x) and head.get(it, 0.0) >= HEAD_MIN]
-    return min(ok, key=lambda it: items[it]["ss_sum"]) if ok else None
+    return sorted(ok, key=lambda it: items[it]["ss_sum"])
+
+
+def choose_candidate(items, head):
+    ranked = rank_candidates(items, head)
+    return ranked[0] if ranked else None
 
 
 def final_verdict(items, final, cand, extras):
@@ -165,20 +170,33 @@ class Pipeline:
             return
         cands = [it for it in final if it in items and qualifies(items[it])]
         extras["head"] = self.head_tracking(label, cands) if cands else {}
-        cand = choose_candidate({it: items[it] for it in final if it in items}, extras["head"])
+        # Every bar item, then the smallest step error: the per-checkpoint items rank the candidates, and the
+        # contract test and the sensitivity matrix (minutes each) are run down that order until one passes both.
+        ranked = rank_candidates({it: items[it] for it in final if it in items}, extras["head"])
+        extras["tried"], cand = {}, None
+        for it in ranked:
+            contract, sens = self.final_checks(label, it, items[it]["onnx"])
+            extras["tried"][it] = (contract, sens)
+            if contract and sens is not None and sens <= 4:
+                cand = it
+                break
+        if cand is None and ranked:
+            cand = ranked[0]  # reported, and judged FAIL on its extras
         extras["candidate"] = cand
         if cand is not None:
-            onnx = items[cand]["onnx"]
-            extras["contract"] = self.sh(["uv", "run", "--with", "pytest", "pytest", "-q", "tests/test_deploy_contract.py"],
-                                         env={"MICRODUCK_TEST_ONNX": onnx}) == 0
-            tag = f"{label}_{cand}"
-            table = REPO / "runs" / "sens" / tag / "table.md"
-            if not table.exists():
-                self.sh([PY, "scripts/sensitivity.py", "--walking", onnx, "--tag", tag, "--jobs", "8"], log=REPO / "runs" / f"sens_{tag}.out")
-            m = re.search(r"\*\*fails\*\* \((\d+)\)", table.read_text()) if table.exists() else None
-            extras["sens_fails"] = int(m.group(1)) if m else None
+            extras["contract"], extras["sens_fails"] = extras["tried"][cand]
         extras["verdict"], extras["reasons"] = final_verdict(items, final, cand, extras)
         self.log(f"{label}: final bar {extras['verdict']} {extras['reasons']} candidate {cand}")
+
+    def final_checks(self, label, it, onnx):
+        contract = self.sh(["uv", "run", "--with", "pytest", "pytest", "-q", "tests/test_deploy_contract.py"],
+                           env={"MICRODUCK_TEST_ONNX": onnx}) == 0
+        tag = f"{label}_{it}"
+        table = REPO / "runs" / "sens" / tag / "table.md"
+        if not table.exists():
+            self.sh([PY, "scripts/sensitivity.py", "--walking", onnx, "--tag", tag, "--jobs", "8"], log=REPO / "runs" / f"sens_{tag}.out")
+        m = re.search(r"\*\*fails\*\* \((\d+)\)", table.read_text()) if table.exists() else None
+        return contract, (int(m.group(1)) if m else None)
 
     def write_md(self):
         lines = ["# Evaluation pipeline: " + self.path.stem, "", f"Updated {time.strftime('%Y-%m-%d %H:%M:%S')}.", ""]
@@ -202,6 +220,7 @@ class Pipeline:
                 head = ", ".join(f"{it}: {r:.1%}" for it, r in sorted(extras.get("head", {}).items())) or "-"
                 lines += ["", f"- head tracking vs reference: {head}",
                           f"- candidate: {extras['candidate']}; contract {extras.get('contract')}; sensitivity fails {extras.get('sens_fails')}",
+                          "- tried (contract, sensitivity fails): " + (", ".join(f"{it}: {v}" for it, v in extras.get("tried", {}).items()) or "-"),
                           f"- **final bar: {extras['verdict']}** {'; '.join(extras['reasons'])}"]
             lines.append("")
         self.md_path.write_text("\n".join(lines))
