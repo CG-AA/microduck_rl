@@ -5888,6 +5888,65 @@ def track_linear_velocity_fine(
     return torch.exp(-torch.sum(torch.square(cmd - env._lin_vel_ema), dim=1) / std**2)
 
 
+def _smoothed(env, name: str, x: torch.Tensor, tau_s: float | None) -> torch.Tensor:
+    """x itself when tau_s is None, else a per-env EMA of x kept as env.<name> (restarted at the
+    measured value on an episode's first steps)."""
+    if tau_s is None:
+        return x
+    if not hasattr(env, name):
+        setattr(env, name, x.clone())
+    ema = getattr(env, name)
+    fresh = env.episode_length_buf <= 1
+    ema[fresh] = x[fresh]
+    alpha = min(1.0, float(env.step_dt) / max(tau_s, 1e-6))
+    ema = (1.0 - alpha) * ema + alpha * x
+    setattr(env, name, ema)
+    return ema
+
+
+def track_linear_velocity_smooth(
+    env: ManagerBasedRlEnv,
+    std: float,
+    command_name: str,
+    tau_s: float | None = None,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """mjlab's track_linear_velocity, exp(-(|cmd_xy - v_xy|² + v_z²)/std²); with tau_s, scored on a
+    per-env EMA of the body linear velocity instead of the instant value.
+
+    Why (HD-1910 iteration 3e, 2026-10-21): the instant version bills every stride's speed swing and
+    vertical bob, so a robot creeping at a small command scores less than one standing still at it.
+    Measured walk - stand over a 0.10 m/s command plus the 2 s stand after it: -1.1 / -0.3 / +2.7
+    reward*s for 2.75 / 4 / 9 s commands (training segments are 3-8 s). The EMA keeps the price of a
+    sustained error and lets the stride cycle cancel, as track_linear_velocity_fine does."""
+    asset: Entity = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    v = _smoothed(env, "_lin3_ema", asset.data.root_link_lin_vel_b, tau_s)
+    err = torch.sum(torch.square(command[:, :2] - v[:, :2]), dim=1) + torch.square(v[:, 2])
+    return torch.exp(-err / std**2)
+
+
+def track_angular_velocity_smooth(
+    env: ManagerBasedRlEnv,
+    std: float,
+    command_name: str,
+    tau_s: float | None = None,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """mjlab's track_angular_velocity, exp(-((cmd_wz - w_z)² + w_x² + w_y²)/std²); with tau_s, scored on
+    a per-env EMA of the body angular velocity.
+
+    Why (HD-1910 iteration 3e): the instant w_x² + w_y² bills the trunk rocking of every stride, ~1 /s
+    while walking, the largest single reason the reward preferred standing to creeping (-8.6 reward*s
+    over a 9 s 0.10 m/s command). On an EMA the stride-frequency rocking cancels while a sustained roll
+    or pitch rate (a fall in progress) is still priced; dropping w_xy outright scored slightly worse."""
+    asset: Entity = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    w = _smoothed(env, "_ang_ema", asset.data.root_link_ang_vel_b, tau_s)
+    err = torch.square(command[:, 2] - w[:, 2]) + torch.sum(torch.square(w[:, :2]), dim=1)
+    return torch.exp(-err / std**2)
+
+
 def upright_body_cmd_relative(
     env: ManagerBasedRlEnv,
     std: float,

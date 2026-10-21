@@ -124,7 +124,7 @@ YAW_FINE_TAU_S = 0.5
 #      between |v_cmd,xy| = 0.10 and 0.20 m/s.
 # Both start at iteration 2500 (reward_params_curriculum), so they can be tested as
 # branches from v2d's 2500 checkpoints. The arm comes from the HD1910_ARM environment
-# variable (v2d | C | D | CD | CQ | CQN | CQD, the last three below); the default reproduces v2d exactly.
+# variable (v2d | C | D | CD | CQ | CQN | CQD | CQS, the last four below); the default reproduces v2d exactly.
 STAND_TORQUE_SETTLE_S = 1.0
 YAW_FINE_LIN_GATE = (0.10, 0.20)
 ITER3_STAGE = 2500
@@ -173,7 +173,21 @@ ACTION_STD_CAP_STAGES = [(2500, 0.15), (2750, 0.10), (3000, 0.07), (3250, 0.05)]
 # the 95 % bar), and the cap stepped every 500 iterations to 0.05 at 4500.
 QUIET_DRILL_SEGMENT_S = (1.5, 4.0)
 ACTION_STD_CAP_STAGES_CQD = [(2500, 0.15), (3000, 0.12), (3500, 0.09), (4000, 0.07), (4500, 0.05)]
-ARMS = ("v2d", "C", "D", "CD", "CQ", "CQN", "CQD")
+# -- Iteration 3e (2026-10-21): CQD made every seed ignore small linear commands. The reward itself
+# preferred standing: walk - stand over a small command plus the 2 s stand after it [reward*s],
+# measured on CQ s42@6000 (mean actions, quiet):
+#   command      1.5 s   2.75 s   4 s    9 s
+#   fwd 0.05     -2.7    -2.9    -3.1   -3.3
+#   fwd 0.10     -2.1    -1.1    -0.3   +2.7
+#   back 0.10    -2.7    -1.9    -1.0   +2.1
+# (training segments 3-8 s; CQD's drills averaged 2.75 s). Largest cost: the stock angular term's
+# instant wx^2 + wy^2, which bills every stride's trunk rocking (-8.6 over 9 s at 0.10 m/s); then
+# pose and the stock linear term's instant error (stride swing, vertical bob). With both stock terms
+# scored on a 0.5 s EMA: fwd 0.05 -0.2 / +1.4 / +6.0 and fwd 0.10 +1.9 / +4.7 / +14.0 at 2.75 / 4 /
+# 9 s, back and left alike. CQS = CQN (cap, quiet episodes, start practice, normal segments) + held
+# quiet poses + the two stock terms on that EMA, from ITER3_STAGE.
+STOCK_TRACK_TAU_S = 0.5
+ARMS = ("v2d", "C", "D", "CD", "CQ", "CQN", "CQD", "CQS")
 ARM = os.environ.get("HD1910_ARM", "v2d")
 if ARM not in ARMS:
     raise ValueError(f"HD1910_ARM={ARM!r}: expected one of {ARMS}")
@@ -249,7 +263,8 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
     settle-gates stand_torque, C speed-gates the fine yaw term, CQ is C plus quiet episodes
     and start practice, CQN is CQ plus the action-noise ceiling and pushes for moving quiet
     robots, CQD is CQN with quiet episodes as start drills, held quiet poses and a slower
-    ceiling, all from ITER3_STAGE. Stage 0 of each curriculum equals the term's
+    ceiling, CQS is CQN with held quiet poses and the stock tracking terms on an EMA, all
+    from ITER3_STAGE. Stage 0 of each curriculum equals the term's
     own (neutral) params; "v2d" adds nothing."""
     if arm not in ARMS:
         raise ValueError(f"arm {arm!r}: expected one of {ARMS}")
@@ -262,7 +277,7 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
                 {"step": 0, "params": {"settle_s": 0.0}},
                 {"step": step, "params": {"settle_s": STAND_TORQUE_SETTLE_S}}]},
         )
-    if arm in ("C", "CD", "CQ", "CQN", "CQD"):
+    if arm in ("C", "CD", "CQ", "CQN", "CQD", "CQS"):
         cfg.rewards["track_yaw_rate_fine"].params["lin_gate"] = None
         cfg.curriculum["yaw_fine_gate"] = CurriculumTermCfg(
             func=microduck_mdp.reward_params_curriculum,
@@ -270,7 +285,7 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
                 {"step": 0, "params": {"lin_gate": None}},
                 {"step": step, "params": {"lin_gate": YAW_FINE_LIN_GATE}}]},
         )
-    if arm in ("CQ", "CQN", "CQD"):
+    if arm in ("CQ", "CQN", "CQD", "CQS"):
         cfg.events["quiet_envs"] = EventTermCfg(func=microduck_mdp.sample_quiet_envs, mode="reset", params={"prob": 0.0})
         cfg.curriculum["quiet_envs_stages"] = CurriculumTermCfg(
             func=microduck_mdp.event_params_curriculum,
@@ -280,7 +295,7 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
         for name in ("head_pose", "body_pose"):
             if name in cfg.commands:
                 pose = deepcopy(cfg.commands[name])
-                if arm == "CQD":
+                if arm in ("CQD", "CQS"):
                     pose.quiet_hold = True  # inert until the stage sets quiet envs
                 else:
                     pose.quiet_zero = True
@@ -288,7 +303,7 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
         if "push_robot" in cfg.events:
             push = deepcopy(cfg.events["push_robot"])
             push.func = microduck_mdp.push_by_setting_velocity_unless_quiet
-            if arm in ("CQN", "CQD"):
+            if arm in ("CQN", "CQD", "CQS"):
                 push.params["push_moving_quiet"] = True
             cfg.events["push_robot"] = push
         twist = deepcopy(cfg.commands["twist"])
@@ -302,13 +317,25 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
             params={"command_name": "twist", "attr": "rel_start_slow_envs", "stages": [
                 {"step": 0, "value": 0.0}, {"step": step, "value": START_SLOW_ENVS}]},
         )
-    if arm in ("CQN", "CQD"):
-        stages = ACTION_STD_CAP_STAGES if arm == "CQN" else ACTION_STD_CAP_STAGES_CQD
+    if arm in ("CQN", "CQD", "CQS"):
+        stages = ACTION_STD_CAP_STAGES_CQD if arm == "CQD" else ACTION_STD_CAP_STAGES
         cfg.curriculum["action_std_cap"] = CurriculumTermCfg(
             func=microduck_mdp.action_std_cap_curriculum,
             params={"stages": [{"step": 0, "cap": None}] + [
                 {"step": it * NUM_STEPS_PER_ENV, "cap": cap} for it, cap in stages]},
         )
+    if arm == "CQS":
+        for name, func in (("track_linear_velocity", microduck_mdp.track_linear_velocity_smooth),
+                           ("track_angular_velocity", microduck_mdp.track_angular_velocity_smooth)):
+            term = deepcopy(cfg.rewards[name])
+            term.func = func  # tau_s None = the stock term, bit for bit
+            term.params["tau_s"] = None
+            cfg.rewards[name] = term
+            cfg.curriculum[f"{name}_smooth"] = CurriculumTermCfg(
+                func=microduck_mdp.reward_params_curriculum,
+                params={"reward_name": name, "stages": [
+                    {"step": 0, "params": {"tau_s": None}}, {"step": step, "params": {"tau_s": STOCK_TRACK_TAU_S}}]},
+            )
     return cfg
 
 

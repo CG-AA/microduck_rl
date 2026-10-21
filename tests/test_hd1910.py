@@ -413,7 +413,7 @@ def test_reward_params_curriculum_switches_the_live_term():
     assert term.params == {"std": 0.35, "lin_gate": (0.1, 0.2)}
 
 
-@pytest.mark.parametrize("arm", ["v2d", "C", "D", "CD", "CQ", "CQN", "CQD"])
+@pytest.mark.parametrize("arm", ["v2d", "C", "D", "CD", "CQ", "CQN", "CQD", "CQS"])
 def test_iter3_arms_wire_only_their_change(arm):
     """Each arm adds exactly its curriculum, neutral before ITER3_STAGE; v2d adds nothing (the default)."""
     from mjlab.tasks.registry import load_env_cfg
@@ -423,7 +423,7 @@ def test_iter3_arms_wire_only_their_change(arm):
     assert hd1910.ARM == "v2d"  # the import default reproduces the delivered recipe
     cfg = hd1910.apply_iter3_arm(load_env_cfg("Mjlab-Velocity-Flat-MicroDuck-HD1910"), arm)
     has_d, has_c = "stand_torque_settle" in cfg.curriculum, "yaw_fine_gate" in cfg.curriculum
-    assert (has_d, has_c) == (arm in ("D", "CD"), arm in ("C", "CD", "CQ", "CQN", "CQD"))
+    assert (has_d, has_c) == (arm in ("D", "CD"), arm in ("C", "CD", "CQ", "CQN", "CQD", "CQS"))
     step = hd1910.ITER3_STAGE * hd1910.NUM_STEPS_PER_ENV
     if has_d:
         c = cfg.curriculum["stand_torque_settle"]
@@ -435,32 +435,39 @@ def test_iter3_arms_wire_only_their_change(arm):
         assert cfg.rewards["track_yaw_rate_fine"].params["lin_gate"] is None
         assert c.params["stages"][-1] == {"step": step, "params": {"lin_gate": (0.10, 0.20)}}
     quiet = {"quiet_envs_stages", "start_slow_stages"}
-    if arm in ("CQ", "CQN", "CQD"):
+    if arm in ("CQ", "CQN", "CQD", "CQS"):
         assert quiet <= set(cfg.curriculum) and cfg.events["quiet_envs"].params == {"prob": 0.0}
         assert cfg.curriculum["quiet_envs_stages"].params["stages"][-1] == {"step": step, "params": {"prob": 0.25}}
         assert cfg.curriculum["start_slow_stages"].params["stages"][-1] == {"step": step, "value": 0.5}
         assert cfg.commands["twist"].rel_start_slow_envs == 0.0 and cfg.commands["twist"].start_turn_range == (0.3, 0.6)
-        held = arm == "CQD"  # CQD holds the quiet poses, CQ/CQN zero them
+        held = arm in ("CQD", "CQS")  # CQD/CQS hold the quiet poses, CQ/CQN zero them
         for name in ("head_pose", "body_pose"):
             assert (cfg.commands[name].quiet_zero, cfg.commands[name].quiet_hold) == (not held, held)
-        assert cfg.commands["twist"].quiet_drill_segment_range == ((1.5, 4.0) if held else None)
+        assert cfg.commands["twist"].quiet_drill_segment_range == ((1.5, 4.0) if arm == "CQD" else None)
         assert cfg.events["push_robot"].func is microduck_mdp.push_by_setting_velocity_unless_quiet
     else:
         assert not quiet & set(cfg.curriculum) and "quiet_envs" not in cfg.events
         assert not cfg.commands["head_pose"].quiet_zero and cfg.commands["twist"].rel_start_slow_envs == 0.0
         assert not cfg.commands["head_pose"].quiet_hold and cfg.commands["twist"].quiet_drill_segment_range is None
         assert cfg.events["push_robot"].func is not microduck_mdp.push_by_setting_velocity_unless_quiet
-    if arm in ("CQN", "CQD"):
+    if arm in ("CQN", "CQD", "CQS"):
         assert cfg.events["push_robot"].params["push_moving_quiet"] is True
         c = cfg.curriculum["action_std_cap"]
         assert c.func is microduck_mdp.action_std_cap_curriculum
         assert c.params["stages"][0] == {"step": 0, "cap": None}
-        caps = (((2500, 0.15), (2750, 0.10), (3000, 0.07), (3250, 0.05)) if arm == "CQN" else
+        caps = (((2500, 0.15), (2750, 0.10), (3000, 0.07), (3250, 0.05)) if arm != "CQD" else
                 ((2500, 0.15), (3000, 0.12), (3500, 0.09), (4000, 0.07), (4500, 0.05)))
         assert c.params["stages"][1:] == [{"step": it * 24, "cap": cap} for it, cap in caps]
     else:
         assert "action_std_cap" not in cfg.curriculum
         assert "push_moving_quiet" not in cfg.events["push_robot"].params
+    for name, func in (("track_linear_velocity", microduck_mdp.track_linear_velocity_smooth),
+                       ("track_angular_velocity", microduck_mdp.track_angular_velocity_smooth)):
+        if arm == "CQS":
+            assert cfg.rewards[name].func is func and cfg.rewards[name].params["tau_s"] is None
+            assert cfg.curriculum[f"{name}_smooth"].params["stages"][-1] == {"step": step, "params": {"tau_s": 0.5}}
+        else:
+            assert cfg.rewards[name].func is not func and f"{name}_smooth" not in cfg.curriculum
     if arm == "v2d":
         assert "settle_s" not in cfg.rewards["stand_torque"].params and "lin_gate" not in cfg.rewards["track_yaw_rate_fine"].params
     xl = load_env_cfg("Mjlab-Velocity-Flat-MicroDuck")
@@ -672,3 +679,60 @@ def test_quiet_hold_keeps_the_episode_pose():
     pose._resample_command(ids)
     assert not torch.equal(pose._command[q], first[q])
 
+
+
+# ---- iteration 3e: stock tracking terms on an EMA (arm CQS) -------------------------------------------
+
+def _state_env(n, cmd, step_dt=0.02):
+    import types
+    data = types.SimpleNamespace(root_link_lin_vel_b=torch.zeros(n, 3), root_link_ang_vel_b=torch.zeros(n, 3))
+    cmd = torch.as_tensor(cmd, dtype=torch.float32)
+    return types.SimpleNamespace(step_dt=step_dt, episode_length_buf=torch.full((n,), 100),
+                                 command_manager=types.SimpleNamespace(get_command=lambda name: cmd),
+                                 scene={"robot": types.SimpleNamespace(data=data)}), data
+
+
+def test_smooth_tracking_terms_equal_the_stock_ones_without_tau():
+    from mjlab.tasks.velocity import mdp as stock
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    torch.manual_seed(0)
+    n = 64
+    env, data = _state_env(n, torch.randn(n, 3) * 0.3)
+    data.root_link_lin_vel_b[:] = torch.randn(n, 3) * 0.2
+    data.root_link_ang_vel_b[:] = torch.randn(n, 3) * 0.6
+    for ours, theirs, std in ((microduck_mdp.track_linear_velocity_smooth, stock.track_linear_velocity, math.sqrt(0.1)),
+                              (microduck_mdp.track_angular_velocity_smooth, stock.track_angular_velocity, math.sqrt(0.5))):
+        assert torch.equal(ours(env, std=std, command_name="twist"), theirs(env, std=std, command_name="twist"))
+
+
+def test_smooth_angular_term_lets_stride_rocking_cancel_and_prices_a_sustained_roll():
+    """On a 0.5 s EMA a zero-mean 2.5 Hz trunk rocking of 0.6 rad/s scores ~1 (instant: exp(-0.18/0.5)
+    on average), a sustained 0.6 rad/s roll rate scores exp(-0.36/0.5); an episode start restarts the average."""
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    env, data = _state_env(2, [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+    std = math.sqrt(0.5)
+    out = inst = None
+    for k in range(200):
+        data.root_link_ang_vel_b[0, 0] = 0.6 * math.sin(2 * math.pi * 2.5 * k * 0.02)
+        data.root_link_ang_vel_b[1, 0] = 0.6
+        out = microduck_mdp.track_angular_velocity_smooth(env, std=std, command_name="twist", tau_s=0.5)
+    assert out[0] > 0.98 and out[1] == pytest.approx(math.exp(-0.36 / 0.5), rel=1e-3)
+    env.episode_length_buf = torch.tensor([1, 100])
+    data.root_link_ang_vel_b[0, 0] = 0.9
+    restarted = microduck_mdp.track_angular_velocity_smooth(env, std=std, command_name="twist", tau_s=0.5)
+    assert restarted[0] == pytest.approx(math.exp(-0.81 / 0.5), rel=1e-3)  # the EMA restarts at the measured value
+
+
+def test_smooth_linear_term_prices_the_mean_speed_not_the_stride_swing():
+    from mjlab_microduck.tasks import mdp as microduck_mdp
+
+    env, data = _state_env(2, [[0.10, 0.0, 0.0], [0.10, 0.0, 0.0]])
+    std = math.sqrt(0.1)
+    for k in range(200):  # env 0 walks at 0.10 +- 0.08 with a 0.03 m/s vertical bob; env 1 stands
+        ph = 2 * math.pi * 2.5 * k * 0.02
+        data.root_link_lin_vel_b[0] = torch.tensor([0.10 + 0.08 * math.sin(ph), 0.0, 0.03 * math.cos(2 * ph)])
+        data.root_link_lin_vel_b[1] = 0.0
+        out = microduck_mdp.track_linear_velocity_smooth(env, std=std, command_name="twist", tau_s=0.5)
+    assert out[0] > 0.995 and out[1] == pytest.approx(math.exp(-0.01 / 0.1), rel=1e-3)
