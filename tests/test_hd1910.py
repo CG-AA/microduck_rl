@@ -322,7 +322,7 @@ def test_hd1910_v2d_adds_the_smoothed_fine_yaw_term():
         cfg = load_env_cfg(task)
         t = cfg.rewards["track_yaw_rate_fine"]
         assert t.func is microduck_mdp.track_yaw_rate_fine and t.weight == hd1910.YAW_FINE_WEIGHT == 2.0
-        assert t.params == {"std": 0.35, "command_name": "twist", "tau_s": 0.5}
+        assert {k: t.params[k] for k in ("std", "command_name", "tau_s")} == {"std": 0.35, "command_name": "twist", "tau_s": 0.5}
         assert cfg.rewards["track_angular_velocity"].weight == 2.0
         assert cfg.rewards["track_angular_velocity"].params["std"] == pytest.approx(math.sqrt(0.5))
     assert "track_yaw_rate_fine" not in load_env_cfg("Mjlab-Velocity-Flat-MicroDuck").rewards
@@ -420,8 +420,10 @@ def test_iter3_arms_wire_only_their_change(arm):
     from mjlab_microduck.tasks import hd1910
     from mjlab_microduck.tasks import mdp as microduck_mdp
 
-    assert hd1910.ARM == "v2d"  # the import default reproduces the delivered recipe
-    cfg = hd1910.apply_iter3_arm(load_env_cfg("Mjlab-Velocity-Flat-MicroDuck-HD1910"), arm)
+    from mjlab_microduck.tasks.microduck_velocity_env_cfg import make_microduck_velocity_env_cfg
+
+    assert hd1910.ARM == "CQR"  # the import default is the delivered recipe (2026-10-22)
+    cfg = hd1910.apply_iter3_arm(hd1910.make_hd1910_variant(make_microduck_velocity_env_cfg(), arm="v2d"), arm)
     has_d, has_c = "stand_torque_settle" in cfg.curriculum, "yaw_fine_gate" in cfg.curriculum
     assert (has_d, has_c) == (arm in ("D", "CD"), arm in ("C", "CD", "CQ", "CQN", "CQD", "CQS", "CQR"))
     step = hd1910.ITER3_STAGE * hd1910.NUM_STEPS_PER_ENV

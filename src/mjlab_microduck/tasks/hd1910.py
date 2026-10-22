@@ -124,7 +124,7 @@ YAW_FINE_TAU_S = 0.5
 #      between |v_cmd,xy| = 0.10 and 0.20 m/s.
 # Both start at iteration 2500 (reward_params_curriculum), so they can be tested as
 # branches from v2d's 2500 checkpoints. The arm comes from the HD1910_ARM environment
-# variable (v2d | C | D | CD | CQ | CQN | CQD | CQS | CQR, the last five below); the default reproduces v2d exactly.
+# variable (v2d | C | D | CD | CQ | CQN | CQD | CQS | CQR, the last five below); HD1910_ARM=v2d reproduces v2d exactly.
 STAND_TORQUE_SETTLE_S = 1.0
 YAW_FINE_LIN_GATE = (0.10, 0.20)
 ITER3_STAGE = 2500
@@ -193,13 +193,15 @@ STOCK_TRACK_TAU_S = 0.5
 # torque peaks 0.88 -> 0.99 -> 1.12 N.m at 4000 / 5750 / 6000 (stall 1.22; CQN s7 0.83-0.85). CQR =
 # CQS with the angular term's yaw error on the instant rate again and only w_x, w_y smoothed.
 ARMS = ("v2d", "C", "D", "CD", "CQ", "CQN", "CQD", "CQS", "CQR")
-ARM = os.environ.get("HD1910_ARM", "v2d")
+# Default CQR since 2026-10-22: the delivered runs/hd1910_v3cqr.onnx (fresh seed 123 @5000) passed the
+# iteration-3 final bar; HD1910_ARM=v2d reproduces the previous deliverable's recipe.
+ARM = os.environ.get("HD1910_ARM", "CQR")
 if ARM not in ARMS:
     raise ValueError(f"HD1910_ARM={ARM!r}: expected one of {ARMS}")
 
 
-def apply_hd1910_recipe(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
-    """The HD-1910 overlay on a velocity-recipe cfg (idempotent)."""
+def apply_hd1910_recipe(cfg: ManagerBasedRlEnvCfg, arm: str | None = None) -> ManagerBasedRlEnvCfg:
+    """The HD-1910 overlay on a velocity-recipe cfg (idempotent). arm: an iteration-3 arm (default: ARM)."""
     # The HD-1910 stand pose is ~9 mm taller than HOME: spawn so the soles land on
     # the floor, as the base's (0.12, 0.13) does for HOME. Copy the term first.
     reset = deepcopy(cfg.events["reset_base"])
@@ -259,7 +261,7 @@ def apply_hd1910_recipe(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
         params={"reward_name": "stand_torque",
                 "weight_stages": [{"step": steps(it), "weight": w} for it, w in STAND_TORQUE_STAGES]},
     )
-    apply_iter3_arm(cfg, ARM)
+    apply_iter3_arm(cfg, ARM if arm is None else arm)
     return cfg
 
 
@@ -349,10 +351,11 @@ def apply_iter3_arm(cfg: ManagerBasedRlEnvCfg, arm: str) -> ManagerBasedRlEnvCfg
 def make_hd1910_variant(
     cfg: ManagerBasedRlEnvCfg,
     robot_cfg: EntityCfg = HD1910_WALK_ROBOT_CFG,
+    arm: str | None = None,
 ) -> ManagerBasedRlEnvCfg:
     """Swap a microduck env cfg's robot for the HD-1910 one and apply the HD-1910 recipe."""
     cfg.scene.entities = {**cfg.scene.entities, "robot": robot_cfg}
-    return apply_hd1910_recipe(cfg)
+    return apply_hd1910_recipe(cfg, arm)
 
 
 # Own log directory so HD-1910 runs never mix with XL330 ones.
